@@ -34,8 +34,8 @@ Maps **Windows Systems Engineering / course requirements** to **AI Calendar Stud
 
 | # | Requirement | How this project satisfies it | Status |
 |---|-------------|-------------------------------|--------|
-| 9 | Gateway classes | Supabase, Google Calendar, Telegram gateways | `[x]` |
-| 10 | External service integration | Calendar sync + Telegram send | `[x]` |
+| 9 | Gateway classes | Supabase, Google Calendar (OAuth), Telegram gateways | `[x]` |
+| 10 | External service integration | Google OAuth sync + Telegram send | `[x]` |
 | 11 | Ollama in Docker | Placeholder `AiRecommendationService`; Ollama later | `[~]` stub |
 | 12 | LangChain + RAG / Chroma | Deferred post-demo; `rag/` package retained | `[ ]` deferred |
 | 13 | Telegram integration | `TelegramGateway` + `/briefs/send-telegram` | `[x]` |
@@ -53,7 +53,7 @@ Maps **Windows Systems Engineering / course requirements** to **AI Calendar Stud
 | 18 | Entering data | Calendar sync as primary data source | `[x]` |
 | 19 | Study recommendations | Brief sections + AI tip | `[x]` |
 | 20 | Daily / weekly brief | `/briefs/today`, `/briefs/weekly` | `[x]` |
-| 21 | Google Calendar | Gateway + demo fallback + classifier | `[x]` |
+| 21 | Google Calendar | Per-user OAuth + real sync + EN/HE classifier | `[x]` |
 
 ---
 

@@ -145,3 +145,20 @@ Also: [`skills/cursor_project_architect.md`](../skills/cursor_project_architect.
 
 **Decision:**
 - Never commit `.env` or credential JSON files; use `.env.example` only
+
+---
+
+### 2026-08 — Real Google Calendar OAuth (per-user)
+
+**Prompt (summary):**
+> Replace mock/service-account calendar flow with InstalledAppFlow OAuth, per-user token files, connect/status/sync APIs, EN+HE classifier, desktop Connect button.
+
+**Outcome:**
+- `GoogleCalendarGateway` uses `google-auth-oauthlib` + readonly scope
+- Tokens stored under `local_tokens/google_calendar/<user_id>.json` (gitignored)
+- Endpoints: `/calendar/status`, `/calendar/connect`, `/calendar/sync`, `/events/today`, `/events/week`
+- Desktop: Connect Google Calendar + connection status label
+- Demo/mock events removed from primary sync path (clear errors instead)
+
+**Decision:**
+- OAuth client JSON ≠ user token; document both in README / secrets/README.md

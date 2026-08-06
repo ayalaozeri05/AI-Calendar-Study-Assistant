@@ -20,6 +20,9 @@ credentials.json
 token.json
 client_secret*.json
 google_credentials*.json
+google_calendar_credentials*.json
+secrets/*.json
+local_tokens/
 
 # Local data / RAG
 chroma_db/

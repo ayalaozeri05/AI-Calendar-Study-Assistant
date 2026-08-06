@@ -20,10 +20,20 @@ class Settings(BaseSettings):
     api_port: int = 8000
     supabase_url: str = ""
     supabase_anon_key: str = ""
+
+    # Google Calendar OAuth (Desktop client JSON + per-user tokens)
+    google_calendar_credentials_path: str = ""
+    # Legacy alias still accepted for compatibility
     google_calendar_credentials_file: str = ""
+    google_calendar_token_dir: str = "local_tokens/google_calendar"
     google_calendar_id: str = "primary"
+
     telegram_bot_token: str = ""
     demo_telegram_chat_id: str = ""
+
+    # Local Ollama (optional — falls back to rule-based planner when unavailable)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = ""
 
 
 settings = Settings()

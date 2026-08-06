@@ -1,1 +1,1 @@
-"""Reusable UI widgets."""
+"""Reusable desktop widgets for the study planner UI."""

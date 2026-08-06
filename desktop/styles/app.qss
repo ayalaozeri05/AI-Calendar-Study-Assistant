@@ -1,0 +1,399 @@
+/* Digital Academic Journal — stationery polish */
+
+QMainWindow, QWidget#appRoot {
+    background-color: #F7F3EA;
+    color: #273043;
+    font-family: "Segoe UI", "Avenir Next", sans-serif;
+    font-size: 14px;
+}
+
+/* Premium paper tooltip (also reinforced via QPalette.ToolTip* in main.py) */
+QToolTip {
+    background-color: #FFFDF8;
+    color: #273043;
+    border: 1px solid #D8D0C4;
+    padding: 6px 8px;
+    border-radius: 4px;
+    opacity: 255;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: "Segoe UI", "Avenir Next", sans-serif;
+}
+
+/* Custom paper popup used by WorkloadTimeline (avoids Windows dark QToolTip) */
+QLabel#paperTip {
+    background-color: #FFFDF8;
+    color: #273043;
+    border: 1px solid #D8D0C4;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QLabel {
+    background: transparent;
+    color: #273043;
+}
+
+QLabel#pageTitle {
+    font-size: 24px;
+    font-weight: 700;
+    color: #273043;
+    letter-spacing: -0.3px;
+}
+
+QLabel#pageSubtitle {
+    font-size: 13px;
+    color: #7A8090;
+}
+
+QLabel#cardTitle {
+    font-size: 15px;
+    font-weight: 700;
+    color: #273043;
+}
+
+QLabel#mutedLabel {
+    font-size: 12px;
+    color: #7A8090;
+}
+
+QLabel#headerStatus {
+    font-size: 12px;
+    color: #7A8090;
+    padding: 0;
+    background: transparent;
+    border: none;
+    line-height: 1.35;
+}
+
+QLabel#sectionLabel {
+    font-size: 11px;
+    font-weight: 700;
+    color: #9A9080;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+QLabel#eventsHeading {
+    font-size: 20px;
+    font-weight: 700;
+    color: #273043;
+    letter-spacing: 1.2px;
+    padding: 6px 0 4px 0;
+}
+
+QFrame#aiTipBox {
+    background-color: #FFF8D6;
+    border: 1px solid #F0E3A0;
+    border-radius: 8px;
+}
+
+QLabel#summaryHeading {
+    font-size: 11px;
+    font-weight: 700;
+    color: #9A9080;
+    letter-spacing: 0.6px;
+}
+
+QLabel#dayHeader {
+    font-size: 13px;
+    font-weight: 700;
+    color: #5A6170;
+    padding: 10px 2px 2px 2px;
+}
+
+QLabel#weekHeader {
+    font-size: 14px;
+    font-weight: 700;
+    color: #A49AF5;
+    padding: 12px 2px 2px 2px;
+    border-bottom: 2px solid #FFF1A8;
+}
+
+QLabel#doodleLine {
+    color: #C9C0B0;
+    font-size: 11px;
+    letter-spacing: 3px;
+}
+
+QLabel#categoryChip {
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#eventDescription {
+    color: #3A4154;
+    font-size: 13px;
+    padding-top: 2px;
+}
+
+QLabel#aiTip {
+    background-color: #FFF8D6;
+    border: 1px solid #F0E3A0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #5A5340;
+    font-size: 12px;
+}
+
+QLabel#notebookDay {
+    font-size: 14px;
+    font-weight: 700;
+    color: #273043;
+    padding-top: 4px;
+}
+
+QLabel#notebookMeta {
+    font-size: 11px;
+    color: #7A8090;
+    font-weight: 600;
+}
+
+QLabel#notebookTitle {
+    font-size: 13px;
+    font-weight: 700;
+    color: #273043;
+}
+
+QLabel#notebookNote {
+    font-size: 12px;
+    color: #5A6170;
+}
+
+QLabel#notebookDivider {
+    color: #D5CBB8;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
+QFrame#paperCard, QFrame#eventCard, QFrame#briefCard, QFrame#emptyCard,
+QFrame#timelineCard, QFrame#summaryCard {
+    background-color: #FFFDF8;
+    border: 1px solid #E5DED3;
+    border-radius: 10px;
+}
+
+QFrame#summaryCard {
+    background-color: #F3EEFF;
+    border: 1px solid #DDD6F5;
+}
+
+QFrame#eventCard:hover {
+    border: 1px solid #C9C2F0;
+}
+
+QFrame#notebookPage {
+    background-color: #FFFDF8;
+    border: 1px solid #E5DED3;
+    border-radius: 10px;
+}
+
+QWidget#notebookInner {
+    background-color: #FFFDF8;
+    /* subtle ruled paper using repeating gradient */
+    background-image: repeating-linear-gradient(
+        transparent,
+        transparent 27px,
+        #F0E9DC 28px
+    );
+}
+
+QFrame#notebookEntry, QFrame#timelineStudy {
+    background-color: rgba(255, 255, 255, 0.72);
+    border: 1px solid #EDE6D8;
+    border-left: 3px solid #DCE8FF;
+    border-radius: 8px;
+}
+
+QFrame#timelineBreak {
+    background-color: rgba(247, 243, 234, 0.9);
+    border: 1px dashed #D5CCBE;
+    border-left: 3px solid #C9C0B0;
+    border-radius: 8px;
+}
+
+QFrame#timelineMeal {
+    background-color: rgba(255, 248, 214, 0.65);
+    border: 1px solid #F0E3A0;
+    border-left: 3px solid #E0C84A;
+    border-radius: 8px;
+}
+
+QFrame#timelineCalendar {
+    background-color: rgba(255, 255, 255, 0.78);
+    border: 1px solid #E8E0D4;
+    border-left: 3px solid #C4BDB2;
+    border-radius: 8px;
+}
+
+QFrame#timelineRecovery {
+    background-color: rgba(247, 243, 234, 0.95);
+    border: 1px solid #E2D9C8;
+    border-left: 3px solid #C4A574;
+    border-radius: 8px;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QFrame#briefCard {
+    min-width: 280px;
+}
+
+QFrame#markerLine {
+    background-color: #FFF1A8;
+    border: none;
+    border-radius: 2px;
+    min-height: 3px;
+    max-height: 3px;
+}
+
+QWidget#eventsCanvas {
+    background: transparent;
+}
+
+QPushButton {
+    background-color: #A49AF5;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+QPushButton:hover { background-color: #9186F0; }
+QPushButton:pressed { background-color: #7F74E8; }
+QPushButton:disabled { background-color: #D5D0F0; color: #F7F6FF; }
+
+QPushButton#primaryWide {
+    padding: 14px 28px;
+    font-size: 15px;
+    min-width: 220px;
+}
+
+QPushButton#compactPrimary {
+    padding: 8px 16px;
+    font-size: 13px;
+}
+
+QPushButton#secondaryButton {
+    background-color: #DCE8FF;
+    color: #3D4A8A;
+    padding: 8px 14px;
+    min-height: 32px;
+}
+QPushButton#secondaryButton:hover { background-color: #CDD9F8; }
+
+QPushButton#ghostButton, QPushButton#linkButton, QPushButton#textBack {
+    background-color: transparent;
+    color: #8B82D9;
+    border: none;
+    padding: 2px 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#textBack:hover, QPushButton#linkButton:hover {
+    color: #6B63C4;
+    background-color: transparent;
+}
+QPushButton#linkButton {
+    text-align: left;
+    padding: 1px 0;
+}
+
+QPushButton#telegramButton {
+    background-color: #6BA3D4;
+    padding: 8px 14px;
+    min-height: 32px;
+}
+QPushButton#telegramButton:hover { background-color: #5B93C4; }
+
+QPushButton#segmentButton {
+    background-color: transparent;
+    color: #7A8090;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 11px;
+    font-weight: 600;
+    font-size: 12px;
+}
+QPushButton#segmentButton:checked {
+    background-color: #FFFDF8;
+    color: #8B82D9;
+}
+
+QFrame#segmentBar {
+    background-color: #EFE8F8;
+    border: 1px solid #E5DED3;
+    border-radius: 8px;
+}
+
+QLabel#toast {
+    background-color: #FFFDF8;
+    color: #273043;
+    border: 1px solid #E5DED3;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QLabel#toast[kind="success"] {
+    background-color: #DDF3E4;
+    color: #2F6F4E;
+    border: 1px solid #C5E8D4;
+}
+QLabel#toast[kind="warning"] {
+    background-color: #FFF1A8;
+    color: #7A6420;
+    border: 1px solid #E8D98A;
+}
+QLabel#toast[kind="error"] {
+    background-color: #FFE1D4;
+    color: #C95A5A;
+    border: 1px solid #F0C4B4;
+}
+
+QDateEdit {
+    background: #FFFDF8;
+    border: 1px solid #E5DED3;
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-height: 26px;
+}
+
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #D5CBB8;
+    border-radius: 4px;
+    min-height: 24px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+QProgressBar {
+    background-color: #EFE8DC;
+    border: none;
+    border-radius: 8px;
+}
+QProgressBar::chunk {
+    background-color: #A49AF5;
+    border-radius: 8px;
+}

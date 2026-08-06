@@ -53,15 +53,17 @@ flowchart TB
 
 ### Dashboard actions (MVP)
 
-| Button | Backend call (planned) |
-|--------|------------------------|
-| Load Demo Student | `GET /users/demo` or similar |
+| Button | Backend call |
+|--------|----------------|
+| Load Demo Student | `POST /users/demo` |
+| Connect Google Calendar | `POST /calendar/connect` |
 | Sync Google Calendar | `POST /calendar/sync` |
 | Show Today Events | `GET /calendar/events/today` |
+| Show Week Events | `GET /calendar/events/week` |
 | Generate Today Brief | `POST /briefs/today` |
 | Send Brief to Telegram | `POST /briefs/send-telegram` |
 
-Status/errors shown in a dedicated label or panel on the same view.
+Connection status shown as: **Not connected** / **Connected** / **Credentials missing**.
 
 **Rule:** No Supabase, Google, or Telegram SDK imports in `desktop/`.
 
@@ -78,13 +80,18 @@ Status/errors shown in a dedicated label or panel on the same view.
 | `gateways/` | Supabase, Google Calendar, Telegram, Ollama (later) |
 | `rag/` | Deferred — placeholder for future RAG phase |
 
-### Flow — Sync calendar and show today
+### Flow — Connect + sync Google Calendar (OAuth)
 
-1. Desktop → `POST /calendar/sync`
-2. Command → `GoogleCalendarGateway.fetch_events()`
-3. `CalendarEventClassifier` assigns prefix category to each title
-4. Optional: log `calendar_synced` in `activity_events` via repository
-5. Desktop → `GET /calendar/events/today` → table populated
+1. Desktop → `POST /calendar/connect` with `user_id`
+2. `GoogleCalendarGateway` loads Desktop OAuth client JSON from `GOOGLE_CALENDAR_CREDENTIALS_PATH`
+3. If no valid token: `InstalledAppFlow.run_local_server()` opens the browser
+4. Refresh/access token saved to `local_tokens/google_calendar/<user_id>.json`
+5. Desktop → `POST /calendar/sync` → gateway lists primary calendar events (read-only scope)
+6. `CalendarEventClassifier` classifies title + description (English + Hebrew keywords)
+7. Events cached in memory (deduped by `external_event_id`); `activity_events` logs `calendar_connected` / `calendar_synced`
+8. Desktop → `GET /calendar/events/today` or `/week` → table populated
+
+**No silent mock fallback.** Missing credentials or disconnected users get readable errors.
 
 ### Flow — Generate and send brief
 
@@ -102,9 +109,17 @@ Status/errors shown in a dedicated label or panel on the same view.
 | Gateway | External system | Status | Purpose |
 |---------|-----------------|--------|---------|
 | `SupabaseGateway` | Supabase | Implemented | DB, profiles, activity log |
-| `GoogleCalendarGateway` | Google Calendar API | Planned | Fetch academic events |
-| `TelegramGateway` | Telegram Bot API | Planned | Send study brief |
+| `GoogleCalendarGateway` | Google Calendar API + OAuth | Implemented | Per-user OAuth, list events |
+| `TelegramGateway` | Telegram Bot API | Implemented | Send study brief |
 | `OllamaGateway` | Ollama (Docker) | Later | AI recommendations stub → real later |
+
+### Google OAuth storage
+
+| Artifact | Path | Notes |
+|----------|------|-------|
+| OAuth client JSON | `GOOGLE_CALENDAR_CREDENTIALS_PATH` (default `secrets/google_calendar_credentials.json`) | Desktop app type; never commit |
+| Per-user token | `GOOGLE_CALENDAR_TOKEN_DIR/<user_id>.json` | Auto-created after consent; never commit |
+| Scope | `calendar.readonly` | Read-only |
 
 Benefits: mock in tests, single config/retry point, clear course requirement demonstration.
 
@@ -116,18 +131,19 @@ Benefits: mock in tests, single config/retry point, clear course requirement dem
 
 ## Calendar event classification
 
-Parser reads title prefix before first colon:
+`CalendarEventClassifier` matches English + Hebrew keywords on **title and description** (prefix before `:` still wins when present):
 
-```text
-Study: Database Systems project     → Study
-Assignment: Algorithms exercise   → Assignment
-Exam: Operating Systems           → Exam
-Class: Software Engineering       → Class
-Project: AI Study Planner         → Project
-Team meeting                      → Other
-```
+| Category | Example keywords |
+|----------|------------------|
+| Exam | exam, quiz, midterm, בחינה, מבחן, בוחן |
+| Assignment | assignment, homework, מטלה, תרגיל |
+| Study | study, review, לימוד, חזרה, תרגול |
+| Project | project, פרויקט |
+| Class | class, lecture, שיעור, הרצאה |
+| Meeting | meeting, standup, פגישה, ישיבה |
+| Other | no keyword match |
 
-Implemented in backend `CalendarEventClassifier` (service), not in desktop.
+Implemented in backend only (not in desktop).
 
 ## AI layer (placeholder — not heavy RAG yet)
 

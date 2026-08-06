@@ -1,235 +1,193 @@
-"""Calendar Study Assistant dashboard view (PySide6 MVP View)."""
+"""Three-state desktop shell: Start → Calendar → Planner."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QMainWindow,
-    QPlainTextEdit,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
-from widgets.category_chart import CategoryChartWidget
-
-STYLESHEET = """
-QMainWindow { background-color: #f4f7fb; }
-QWidget {
-    color: #1e293b;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 13px;
-}
-QLabel#title {
-    font-size: 22px;
-    font-weight: 700;
-    color: #0f172a;
-}
-QLabel#subtitle {
-    color: #64748b;
-    font-size: 13px;
-}
-QPushButton {
-    background-color: #2563eb;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 9px 14px;
-    font-weight: 600;
-}
-QPushButton:hover { background-color: #1d4ed8; }
-QPushButton:disabled { background-color: #94a3b8; }
-QPushButton#secondary {
-    background-color: #0f766e;
-}
-QPushButton#secondary:hover { background-color: #0d9488; }
-QPushButton#danger {
-    background-color: #7c3aed;
-}
-QPushButton#danger:hover { background-color: #6d28d9; }
-QFrame#panel {
-    background: white;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-}
-QTableWidget {
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    gridline-color: #f1f5f9;
-}
-QHeaderView::section {
-    background: #f8fafc;
-    padding: 6px;
-    border: none;
-    border-bottom: 1px solid #e2e8f0;
-    font-weight: 600;
-}
-QPlainTextEdit {
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 8px;
-    background: #fafafa;
-}
-"""
+from pages.calendar_page import CalendarPage
+from pages.planner_page import PlannerPage
+from pages.start_page import StartPage
+from styles import load_app_stylesheet
+from widgets.toast import ToastBar
 
 
 class DashboardView(QMainWindow):
     load_demo_requested = Signal()
+    connect_calendar_requested = Signal()
     sync_calendar_requested = Signal()
-    show_today_requested = Signal()
+    range_events_requested = Signal(str, str, str)
     generate_brief_requested = Signal()
+    regenerate_brief_requested = Signal()
     send_telegram_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AI Calendar Study Assistant")
-        self.resize(1100, 720)
-        self.setStyleSheet(STYLESHEET)
-        self._build_ui()
+        self.resize(1220, 800)
+        self.setMinimumSize(980, 660)
+        self.setStyleSheet(load_app_stylesheet())
 
-    def _build_ui(self) -> None:
+        self._signed_in_email = ""
+        self._google_email = ""
+        self._calendar_connected = False
+        self._last_synced: datetime | None = None
+        self._build()
+        self._wire()
+        self.show_start()
+
+    def _build(self) -> None:
         central = QWidget()
+        central.setObjectName("appRoot")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(12)
+        root.setContentsMargins(12, 8, 12, 8)
+        root.setSpacing(4)
 
-        header = QVBoxLayout()
-        self.title_label = QLabel("AI Calendar Study Assistant")
-        self.title_label.setObjectName("title")
-        self.subtitle_label = QLabel("Load a demo student, sync calendar, generate brief, send to Telegram.")
-        self.subtitle_label.setObjectName("subtitle")
-        header.addWidget(self.title_label)
-        header.addWidget(self.subtitle_label)
-        root.addLayout(header)
+        self.toast = ToastBar()
+        root.addWidget(self.toast)
 
-        actions = QHBoxLayout()
-        self.btn_demo = QPushButton("Load Demo Student")
-        self.btn_demo.setObjectName("danger")
-        self.btn_sync = QPushButton("Sync Google Calendar")
-        self.btn_today = QPushButton("Show Today Events")
-        self.btn_today.setObjectName("secondary")
-        self.btn_brief = QPushButton("Generate Today Brief")
-        self.btn_telegram = QPushButton("Send Brief to Telegram")
+        self.stack = QStackedWidget()
+        self.start_page = StartPage()
+        self.calendar_page = CalendarPage()
+        self.planner_page = PlannerPage()
+        self.stack.addWidget(self.start_page)
+        self.stack.addWidget(self.calendar_page)
+        self.stack.addWidget(self.planner_page)
+        root.addWidget(self.stack, 1)
 
-        self.btn_demo.clicked.connect(self.load_demo_requested.emit)
-        self.btn_sync.clicked.connect(self.sync_calendar_requested.emit)
-        self.btn_today.clicked.connect(self.show_today_requested.emit)
-        self.btn_brief.clicked.connect(self.generate_brief_requested.emit)
-        self.btn_telegram.clicked.connect(self.send_telegram_requested.emit)
+    def _wire(self) -> None:
+        self.start_page.start_requested.connect(self.load_demo_requested.emit)
+        self.calendar_page.connect_requested.connect(self.connect_calendar_requested.emit)
+        self.calendar_page.sync_requested.connect(self.sync_calendar_requested.emit)
+        self.calendar_page.back_requested.connect(self.show_start)
 
-        for btn in (
-            self.btn_demo,
-            self.btn_sync,
-            self.btn_today,
-            self.btn_brief,
-            self.btn_telegram,
-        ):
-            actions.addWidget(btn)
-        actions.addStretch()
-        root.addLayout(actions)
-
-        self.status_label = QLabel("Ready. Start by loading the demo student.")
-        self.status_label.setStyleSheet(
-            "padding: 10px; border-radius: 6px; background: #f1f5f9; color: #475569;"
+        self.planner_page.range_changed.connect(self.range_events_requested.emit)
+        self.planner_page.generate_brief_requested.connect(self.generate_brief_requested.emit)
+        self.planner_page.regenerate_brief_requested.connect(
+            self.regenerate_brief_requested.emit
         )
-        root.addWidget(self.status_label)
+        self.planner_page.send_telegram_requested.connect(self.send_telegram_requested.emit)
+        self.planner_page.sync_requested.connect(self.sync_calendar_requested.emit)
+        self.planner_page.back_requested.connect(self.show_calendar)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
+    def show_start(self) -> None:
+        self.stack.setCurrentWidget(self.start_page)
 
-        left = QFrame()
-        left.setObjectName("panel")
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("Today / synced events"))
-        self.events_table = QTableWidget(0, 4)
-        self.events_table.setHorizontalHeaderLabels(
-            ["Time", "Category", "Title", "End"]
-        )
-        self.events_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.events_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.events_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        left_layout.addWidget(self.events_table)
-        body.addWidget(left, 3)
+    def show_calendar(self) -> None:
+        self.stack.setCurrentWidget(self.calendar_page)
 
-        right = QVBoxLayout()
-        chart_panel = QFrame()
-        chart_panel.setObjectName("panel")
-        chart_layout = QVBoxLayout(chart_panel)
-        self.category_chart = CategoryChartWidget()
-        self.category_chart.setMinimumHeight(220)
-        chart_layout.addWidget(self.category_chart)
-        right.addWidget(chart_panel, 1)
+    def show_planner(self) -> None:
+        self.stack.setCurrentWidget(self.planner_page)
+        self.planner_page.set_back_visible(True)
+        self._refresh_planner_header()
 
-        brief_panel = QFrame()
-        brief_panel.setObjectName("panel")
-        brief_layout = QVBoxLayout(brief_panel)
-        brief_layout.addWidget(QLabel("Study brief"))
-        self.brief_text = QPlainTextEdit()
-        self.brief_text.setReadOnly(True)
-        self.brief_text.setPlaceholderText("Generate a brief to see it here.")
-        brief_layout.addWidget(self.brief_text)
-        right.addWidget(brief_panel, 2)
-
-        body.addLayout(right, 2)
-        root.addLayout(body, 1)
+    def _refresh_planner_header(self) -> None:
+        lines: list[str] = []
+        # Never show the internal demo profile email in the main UI
+        email = (self._google_email or "").strip()
+        if email.lower() == "demo@student.local":
+            email = ""
+        if self._calendar_connected:
+            lines.append("Connected to your Google Calendar")
+            if email:
+                lines.append(email)
+        else:
+            lines.append("Google Calendar not connected")
+        if self._last_synced is not None:
+            when = self._last_synced
+            today = datetime.now().date()
+            if when.date() == today:
+                lines.append(f"Last synced: Today {when.strftime('%H:%M')}")
+            else:
+                lines.append(f"Last synced: {when.strftime('%d %b %H:%M')}")
+        self.planner_page.set_header_status("\n".join(lines))
 
     def set_student_header(self, name: str, email: str) -> None:
-        self.title_label.setText(f"AI Calendar Study Assistant — {name}")
-        self.subtitle_label.setText(f"Student: {email}")
+        # Keep demo profile email internal; display Google account when available
+        self._signed_in_email = email or name or ""
+        self.start_page.set_profile_ready(True)
+        self.calendar_page.set_profile_ready(True)
+        self._refresh_planner_header()
+
+    def set_calendar_connection_status(
+        self, status: str, google_email: str | None = None
+    ) -> None:
+        self._calendar_connected = status == "Connected"
+        if google_email:
+            self._google_email = google_email.strip()
+        elif status != "Connected":
+            self._google_email = ""
+        if status == "Connected":
+            self.calendar_page.set_connected(True)
+        elif status == "Credentials missing":
+            self.calendar_page.set_credentials_missing()
+        else:
+            self.calendar_page.set_connected(False)
+        self._refresh_planner_header()
 
     def show_status(self, message: str, is_error: bool = False) -> None:
+        text = (message or "").strip()
+        if not text:
+            return
+        # Avoid duplicating header info as toast noise
+        lowered = text.lower()
+        if "student profile ready" in lowered or "profile ready" in lowered:
+            return
         if is_error:
-            self.status_label.setText(f"Error: {message}")
-            self.status_label.setStyleSheet(
-                "padding: 10px; border-radius: 6px; background: #fef2f2; "
-                "color: #991b1b; font-weight: 600; border: 1px solid #fecaca;"
-            )
+            kind = "error"
+        elif any(k in lowered for k in ("no events", "empty", "not connected")):
+            kind = "warning"
         else:
-            self.status_label.setText(message)
-            self.status_label.setStyleSheet(
-                "padding: 10px; border-radius: 6px; background: #ecfdf5; "
-                "color: #166534; font-weight: 600; border: 1px solid #bbf7d0;"
-            )
+            kind = "success"
+        self.toast.show_message(text.replace("\n", " "), kind=kind)
 
     def set_busy(self, busy: bool) -> None:
-        for btn in (
-            self.btn_demo,
-            self.btn_sync,
-            self.btn_today,
-            self.btn_brief,
-            self.btn_telegram,
-        ):
-            btn.setEnabled(not busy)
+        self.start_page.set_busy(busy)
+        self.calendar_page.set_busy(busy)
+        self.planner_page.set_busy(busy)
+
+    def set_syncing(self, syncing: bool) -> None:
+        self.calendar_page.set_syncing(syncing)
 
     def populate_events(self, events: list[dict]) -> None:
-        self.events_table.setRowCount(0)
-        for event in events:
-            row = self.events_table.rowCount()
-            self.events_table.insertRow(row)
-            self.events_table.setItem(row, 0, QTableWidgetItem(self._fmt_time(event.get("start"))))
-            self.events_table.setItem(row, 1, QTableWidgetItem(str(event.get("category", ""))))
-            self.events_table.setItem(row, 2, QTableWidgetItem(str(event.get("title", ""))))
-            self.events_table.setItem(row, 3, QTableWidgetItem(self._fmt_time(event.get("end"))))
-        self.category_chart.update_from_events(events)
+        self.planner_page.populate_events(events)
 
-    def set_brief_text(self, text: str) -> None:
-        self.brief_text.setPlainText(text)
+    def set_brief_text(
+        self,
+        text: str,
+        brief_type: str | None = None,
+        plan: dict | None = None,
+    ) -> None:
+        _ = brief_type
+        self.planner_page.set_brief(text, plan=plan)
 
-    @staticmethod
-    def _fmt_time(value: str | None) -> str:
-        if not value:
-            return "-"
-        try:
-            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return str(value)
+    def current_brief_plan(self) -> dict | None:
+        return self.planner_page.brief.current_plan()
+
+    def set_plan_loading(self, loading: bool, *, regenerating: bool = False) -> None:
+        self.planner_page.brief.set_loading(loading, regenerating=regenerating)
+
+    def set_telegram_sending(self, sending: bool) -> None:
+        self.planner_page.brief.set_telegram_sending(sending)
+
+    def clear_brief(self) -> None:
+        self.planner_page.clear_brief()
+
+    def current_range(self) -> tuple[str, str, str]:
+        return self.planner_page.current_range()
+
+    def on_sync_finished(self, events: list[dict], count: int) -> None:
+        _ = events
+        self._last_synced = datetime.now()
+        self.calendar_page.set_syncing(False)
+        self.calendar_page.show_sync_count(count)
+        self.show_planner()
+        self.toast.show_message("Calendar synced", kind="success")
+        mode, start, end = self.planner_page.current_range()
+        self.range_events_requested.emit(mode, start, end)
+
+    def go_to_calendar_after_start(self) -> None:
+        self.show_calendar()

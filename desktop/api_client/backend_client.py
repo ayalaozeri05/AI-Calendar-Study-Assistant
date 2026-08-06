@@ -30,19 +30,58 @@ class BackendClient:
         response = requests.post(f"{self.base_url}/users/demo", timeout=15)
         return self._handle_response(response)
 
-    def sync_calendar(self, user_id: str) -> dict:
-        response = requests.post(
-            f"{self.base_url}/calendar/sync",
-            json={"user_id": user_id},
-            timeout=30,
+    def get_calendar_status(self, user_id: str) -> dict:
+        response = requests.get(
+            f"{self.base_url}/calendar/status",
+            params={"user_id": user_id},
+            timeout=15,
         )
         return self._handle_response(response)
+
+    def connect_google_calendar(self, user_id: str) -> dict:
+        response = requests.post(
+            f"{self.base_url}/calendar/connect",
+            json={"user_id": user_id},
+            timeout=300,
+        )
+        return self._handle_response(response)
+
+    def sync_google_calendar(self, user_id: str, days_ahead: int = 62) -> dict:
+        response = requests.post(
+            f"{self.base_url}/calendar/sync",
+            json={"user_id": user_id, "days_ahead": days_ahead},
+            timeout=90,
+        )
+        return self._handle_response(response)
+
+    def sync_calendar(self, user_id: str) -> dict:
+        return self.sync_google_calendar(user_id, days_ahead=62)
 
     def get_today_events(self, user_id: str) -> dict:
         response = requests.get(
             f"{self.base_url}/calendar/events/today",
             params={"user_id": user_id},
             timeout=15,
+        )
+        return self._handle_response(response)
+
+    def get_week_events(self, user_id: str) -> dict:
+        response = requests.get(
+            f"{self.base_url}/calendar/events/week",
+            params={"user_id": user_id},
+            timeout=15,
+        )
+        return self._handle_response(response)
+
+    def get_events_range(self, user_id: str, start_date: str, end_date: str) -> dict:
+        response = requests.get(
+            f"{self.base_url}/calendar/events/range",
+            params={
+                "user_id": user_id,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            timeout=20,
         )
         return self._handle_response(response)
 
@@ -62,21 +101,63 @@ class BackendClient:
         )
         return self._handle_response(response)
 
+    def generate_range_brief(
+        self,
+        user_id: str,
+        start_date: str,
+        end_date: str,
+        label: str | None = None,
+        *,
+        regenerate: bool = False,
+        previous_plan: dict | None = None,
+        variation_seed: int | None = None,
+        planning_anchor: str | None = None,
+    ) -> dict:
+        payload: dict = {
+            "user_id": user_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "regenerate": regenerate,
+        }
+        if label:
+            payload["label"] = label
+        if previous_plan is not None:
+            payload["previous_plan"] = previous_plan
+        if variation_seed is not None:
+            payload["variation_seed"] = variation_seed
+        if planning_anchor:
+            payload["planning_anchor"] = planning_anchor
+        response = requests.post(
+            f"{self.base_url}/briefs/range",
+            json=payload,
+            timeout=180,
+        )
+        return self._handle_response(response)
+
     def send_brief_to_telegram(
         self,
         user_id: str,
         brief_type: str = "today",
         brief_text: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        plan: dict | None = None,
     ) -> dict:
-        payload: dict[str, str] = {
+        payload: dict = {
             "user_id": user_id,
             "brief_type": brief_type,
         }
         if brief_text:
             payload["brief_text"] = brief_text
+        if start_date:
+            payload["start_date"] = start_date
+        if end_date:
+            payload["end_date"] = end_date
+        if plan is not None:
+            payload["plan"] = plan
         response = requests.post(
             f"{self.base_url}/briefs/send-telegram",
             json=payload,
-            timeout=30,
+            timeout=120,
         )
         return self._handle_response(response)
