@@ -27,19 +27,31 @@ flowchart TB
     Services --> Gateways
     Services --> BriefService[StudyBriefService]
     Services --> Classifier[CalendarEventClassifier]
-    Services --> AiPlaceholder[AiRecommendationService_stub]
+    Services --> AiSvc[AiRecommendationService]
     Repositories --> SupabaseGW[Supabase_Gateway]
     Gateways --> GoogleGW[GoogleCalendar_Gateway]
     Gateways --> TelegramGW[Telegram_Gateway]
-    Gateways --> OllamaGW[Ollama_Gateway_later]
+    Gateways --> OllamaGW[OllamaGateway]
     BriefService --> Classifier
+    AiSvc --> Engine[StudySchedulingEngine]
+    AiSvc --> OllamaGW
   end
 
   SupabaseGW --> Supabase[(Supabase)]
   GoogleGW --> GoogleCal[Google_Calendar_API]
   TelegramGW --> Telegram[Telegram_Bot_API]
-  OllamaGW --> Ollama[Ollama_Docker_later]
+  OllamaGW --> Ollama[Ollama_Docker]
 ```
+
+### Study plan AI modes
+
+| `ai_mode` | Meaning |
+|-----------|---------|
+| `deterministic` | Stable demo / polish disabled (`AI_POLISH_ENABLED=false`). Engine plan only. |
+| `ollama` | Optional wording polish completed successfully. |
+| `rule_based_fallback` | Polish was enabled but failed/timed out; engine plan kept. |
+
+Default for demos: **`AI_POLISH_ENABLED=false`**. Backend base URL for the desktop: **`http://127.0.0.1:8000`** only.
 
 ## Desktop layer (PySide6, MVP)
 
@@ -78,7 +90,7 @@ Connection status shown as: **Not connected** / **Connected** / **Credentials mi
 | `services/` | `StudyBriefService`, `CalendarEventClassifier`, `AiRecommendationService` (stub) |
 | `repositories/` | Supabase reads/writes via gateway |
 | `gateways/` | Supabase, Google Calendar, Telegram, Ollama (later) |
-| `rag/` | Deferred — placeholder for future RAG phase |
+| `rag/` | PDF load → chunk → embed → Chroma → retrieve topics for Create Study Plan |
 
 ### Flow — Connect + sync Google Calendar (OAuth)
 
@@ -145,9 +157,23 @@ Benefits: mock in tests, single config/retry point, clear course requirement dem
 
 Implemented in backend only (not in desktop).
 
-## AI layer (placeholder — not heavy RAG yet)
+## AI layer
 
-`AiRecommendationService` — interface with stub method e.g. `suggest_focus(events) -> str` returning a static or rule-based hint. `OllamaGateway` wired in a later sprint; existing `rag/` package untouched until then.
+- **Study plans:** deterministic scheduling engine owns times, order, calendar, and workload.
+- **RAG:** `backend/app/rag/` indexes uploaded PDFs; before plan generation, the retriever supplies topics for exam/course titles so study block *actions* become specific (WHAT to study). Scheduling geometry is unchanged.
+- **Ollama polish (optional):** wording only (`AI_POLISH_ENABLED`); never changes times, order, or retrieved topics.
+
+### Flow — RAG-enriched study plan
+
+```text
+Calendar + Uploaded PDF
+        ↓
+Retriever (relevant chunks)
+        ↓
+Scheduling Engine
+        ↓
+Study Plan (+ Telegram)
+```
 
 ## Data storage
 
@@ -160,7 +186,7 @@ Defined in [`backend/database/schema.sql`](../backend/database/schema.sql), alre
 | `users_profile` | Demo student, email, `telegram_chat_id` |
 | `courses` | Optional; not primary for calendar MVP |
 | `tasks` | Optional; manual tasks if time allows |
-| `study_documents` | Deferred (RAG later) |
+| `study_documents` | Schema reserved; RAG MVP stores local file metadata + Chroma |
 | `ai_chat_history` | Store generated brief text |
 | `activity_events` | MVP Event Sourcing: sync, brief, telegram events |
 
@@ -169,7 +195,7 @@ Synced calendar events may live **in memory** or brief JSON for MVP until schema
 ### Other
 
 - **Google Calendar** — source of truth for schedule (read via Gateway)
-- **ChromaDB / RAG** — deferred
+- **ChromaDB / RAG** — persistent under `backend/chroma/` via `app/rag/`
 
 ## Configuration
 

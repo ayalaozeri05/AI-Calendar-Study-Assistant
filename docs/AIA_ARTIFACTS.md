@@ -20,13 +20,24 @@ Development of **AI Calendar Study Assistant** (repo: `ai-study-planner`) uses *
 
 ## Project rules for Cursor
 
-Primary skill: [`skills/calendar_study_agent_skill.md`](../skills/calendar_study_agent_skill.md)
+**Discoverable Cursor Agent Skill (required format):**  
+[`.cursor/skills/ai-study-planner-validator/SKILL.md`](../.cursor/skills/ai-study-planner-validator/SKILL.md) — *AI Study Planner Validator*
 
-Also: [`skills/cursor_project_architect.md`](../skills/cursor_project_architect.md)
+Legacy markdown guidance (not Agent Skills):  
+[`skills/calendar_study_agent_skill.md`](../skills/calendar_study_agent_skill.md),  
+[`skills/cursor_project_architect.md`](../skills/cursor_project_architect.md)
 
 ---
 
 ## Artifact log
+
+### 2026-08-07 — Stable demo mode (`AI_POLISH_ENABLED`)
+
+**Decision:** Keep full Ollama-in-Docker + wording-polish implementation; default desktop Study Plan uses the deterministic engine only (`ai_mode=deterministic`). No timeout/fallback UI banners in normal mode. RAG still deferred.
+
+**Outcome:** Config flag `AI_POLISH_ENABLED` (default false); desktop shows "Study plan created"; Ollama verification path documented when flag is true.
+
+---
 
 ### 2025-06 — Initial scaffold
 
@@ -162,3 +173,33 @@ Also: [`skills/cursor_project_architect.md`](../skills/cursor_project_architect.
 
 **Decision:**
 - OAuth client JSON ≠ user token; document both in README / secrets/README.md
+
+---
+
+### 2026-08-06 — Cursor Agent Skill + compliance validation
+
+**Skill name:** AI Study Planner Validator  
+**Skill file path:** `.cursor/skills/ai-study-planner-validator/SKILL.md`  
+**Date used:** 2026-08-06  
+**Validation purpose:** Pre-demo / pre-submission safe compliance run (no Telegram send, no OAuth restart, no DB reset)
+
+**How invoked:** Agent read and executed the Skill procedure against the local repository (secrets audit, FastAPI import, health probes, integration config booleans, pytest).
+
+**Short result:**
+- Secrets: `.env` / credential patterns ignored; tracked secret-pattern scan = 0 hits; `secrets/` untracked
+- Backend: import ok; `/health` ok; `/health/supabase` ok
+- Integrations (booleans only): Supabase + Telegram settings present; Google credentials path configured; local creds/token files not present in this environment; Ollama unavailable / model unset → expect `rule_based_fallback`
+- Tests: **56 passed**
+- Telegram send: not performed
+
+**Manual checks remaining:**
+- Desktop Today empty state (compact under EVENTS) + Hebrew Highest Priority column stability
+- Live Google OAuth + sync on the demo machine
+- Live Ollama polish confirming `ai_mode=ollama` when model is running
+- Optional Telegram send only when explicitly requested
+
+**Related docs:** [`docs/REQUIREMENTS_COMPLIANCE.md`](REQUIREMENTS_COMPLIANCE.md)
+
+**UI fixes in same sprint (not scheduling-logic changes):**
+- Compact range-aware empty state under EVENTS
+- Fixed LTR three-column summary strip (`dir="auto"` only on priority title text)

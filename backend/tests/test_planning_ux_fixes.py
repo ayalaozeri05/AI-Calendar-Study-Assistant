@@ -81,8 +81,13 @@ def test_exam_recovery_blocks_immediate_study():
     items = plan.daily_plan[0].items
     recovery = [i for i in items if i.kind == "recovery"]
     assert recovery
-    # Recovery should cover at least until 13:00 (11:00 + 2h)
-    assert any(i.end_time >= "13:00" for i in recovery)
+    # Exam 09:00–11:00 → recovery begins at 11:00 and abuts lunch (12:15)
+    assert any(i.start_time == "11:00" for i in recovery)
+    assert any(i.end_time == "12:15" for i in recovery)
+    meals = [i for i in items if i.kind == "meal"]
+    if meals:
+        # No unexplained gap between recovery and lunch
+        assert any(i.start_time == "12:15" for i in meals)
     for item in items:
         if (item.kind or "study") != "study":
             continue

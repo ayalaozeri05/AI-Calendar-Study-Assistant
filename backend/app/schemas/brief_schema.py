@@ -63,7 +63,8 @@ class BriefResponse(BaseModel):
     brief_type: BriefType
     text: str
     event_count: int = Field(description="Number of events included in the brief")
-    ai_mode: str = "rule_based_fallback"
+    # deterministic | ollama | rule_based_fallback
+    ai_mode: str = "deterministic"
     plan: StructuredStudyPlan | None = None
     planning_anchor: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)

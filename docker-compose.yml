@@ -1,0 +1,23 @@
+# Ollama (local LLM) for AI Calendar Study Assistant
+# Backend runs on the host and reaches Ollama at http://localhost:11434
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-study-planner-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persist pulled models across container restarts
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  ollama_models:
+    name: ai-study-planner-ollama-models

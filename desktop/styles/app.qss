@@ -171,10 +171,94 @@ QLabel#notebookDivider {
 }
 
 QFrame#paperCard, QFrame#eventCard, QFrame#briefCard, QFrame#emptyCard,
-QFrame#timelineCard, QFrame#summaryCard {
+QFrame#timelineCard, QFrame#summaryCard, QFrame#summaryStrip, QFrame#summaryMiniCard,
+QFrame#studyMaterialCard {
     background-color: #FFFDF8;
     border: 1px solid #E5DED3;
     border-radius: 10px;
+}
+
+QFrame#studyMaterialCard {
+    max-height: 140px;
+    min-height: 0px;
+}
+
+QLabel#ragFileName {
+    font-size: 12px;
+    color: #2F2A26;
+    padding: 0;
+    margin: 0;
+}
+
+QPushButton#ragRemoveButton {
+    background-color: transparent;
+    color: #7A7268;
+    border: 1px solid #E5DED3;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    min-height: 26px;
+    max-height: 30px;
+    min-width: 52px;
+}
+QPushButton#ragRemoveButton:hover {
+    background-color: #F3EEE6;
+    color: #5A5248;
+}
+QPushButton#ragRemoveButton:disabled {
+    color: #B8B0A4;
+    background-color: transparent;
+}
+
+QPushButton#ragAddButton {
+    background-color: #8B82D9;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 26px;
+    max-height: 30px;
+}
+QPushButton#ragAddButton:hover {
+    background-color: #7A71C8;
+}
+QPushButton#ragAddButton:disabled {
+    background-color: #D5D0F0;
+    color: #F7F6FF;
+}
+
+QFrame#emptyCard {
+    max-width: 900px;
+    min-height: 0;
+    background-color: #FFFDF8;
+    border: 1px solid #E5DED3;
+    border-radius: 10px;
+}
+
+QFrame#summaryStrip {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}
+
+QFrame#summaryMiniCard {
+    background-color: #F3EEFF;
+    border: 1px solid #DDD6F5;
+    border-radius: 10px;
+}
+
+QLabel#summaryPrimary {
+    font-size: 14px;
+    font-weight: 600;
+    color: #273043;
+}
+
+QLabel#summarySecondary {
+    font-size: 12px;
+    color: #7A8090;
 }
 
 QFrame#summaryCard {

@@ -133,9 +133,9 @@ class CalendarService:
 
     def get_today_events(self, user_id: UUID) -> TodayEventsResponse:
         self._require_user(user_id)
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now().astimezone().date()
         all_events = get_synced_events(user_id)
-        today_events = [e for e in all_events if e.start.date() == today]
+        today_events = [e for e in all_events if _event_local_date(e) == today]
         return TodayEventsResponse(
             user_id=user_id,
             date=today.isoformat(),
@@ -151,7 +151,7 @@ class CalendarService:
 
     def get_week_events(self, user_id: UUID) -> list[ClassifiedCalendarEvent]:
         self._require_user(user_id)
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now().astimezone().date()
         end = today + timedelta(days=6)
         return self.get_events_in_range(user_id, today, end)
 
@@ -178,8 +178,43 @@ class CalendarService:
         return [
             e
             for e in all_events
-            if start <= e.start.date() <= end
+            if start <= _event_local_date(e) <= end
         ]
+
+    def has_session_sync(self, user_id: UUID) -> bool:
+        """True when this process has run sync for the user (even if zero events)."""
+        return str(user_id) in _synced_events
+
+    def stored_event_count(self, user_id: UUID) -> int:
+        return len(get_synced_events(user_id))
+
+    def ensure_session_events(
+        self, user_id: UUID, *, days_ahead: int = 62
+    ) -> list[ClassifiedCalendarEvent]:
+        """
+        Return in-memory synced events.
+
+        Synced events are process-memory only (not persisted). After a backend
+        restart the cache is empty even if Google OAuth tokens remain on disk.
+        When the user is still connected, rehydrate once via Google sync.
+        """
+        self._require_user(user_id)
+        key = str(user_id)
+        if key in _synced_events:
+            return get_synced_events(user_id)
+
+        status = self._calendar.get_status(user_id)
+        if status.get("connected"):
+            logger.info(
+                "calendar_rehydrate user_id=%s reason=memory_empty_connected "
+                "days_ahead=%s",
+                key,
+                days_ahead,
+            )
+            self.sync_calendar(user_id, days_ahead=days_ahead)
+            return get_synced_events(user_id)
+
+        return []
 
     def _require_user(self, user_id: UUID) -> dict:
         user = self._users.get_user_profile(user_id)
@@ -191,6 +226,19 @@ class CalendarService:
 def get_synced_events(user_id: UUID) -> list[ClassifiedCalendarEvent]:
     """Return cached events for a user (empty until POST /calendar/sync)."""
     return _synced_events.get(str(user_id), [])
+
+
+def clear_synced_events_for_tests() -> None:
+    """Test helper — wipe in-memory sync cache."""
+    _synced_events.clear()
+
+
+def _event_local_date(event: ClassifiedCalendarEvent) -> date:
+    """Compare ranges in the host local timezone (matches desktop date pickers)."""
+    start = event.start
+    if start.tzinfo is not None:
+        start = start.astimezone()
+    return start.date()
 
 
 def _to_classified(

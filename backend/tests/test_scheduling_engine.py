@@ -182,7 +182,7 @@ def test_service_regenerate_keeps_structure():
         _evt("OS Exam", EventCategory.EXAM, now + timedelta(days=8), description="Threads"),
     ]
     svc = AiRecommendationService()
-    plan1, _, mode1 = svc.generate_study_plan(
+    plan1, _, mode1, _ = svc.generate_study_plan(
         events,
         start=now.date(),
         end=now.date() + timedelta(days=8),
@@ -190,7 +190,7 @@ def test_service_regenerate_keeps_structure():
         now=now,
         variation_seed=1,
     )
-    plan2, _, mode2 = svc.generate_study_plan(
+    plan2, _, mode2, _ = svc.generate_study_plan(
         events,
         start=now.date(),
         end=now.date() + timedelta(days=8),
@@ -200,5 +200,5 @@ def test_service_regenerate_keeps_structure():
         previous_plan=plan1.model_dump(),
         variation_seed=2,
     )
-    assert mode1 == mode2 == "rule_based_fallback"
+    assert mode1 == mode2 == "deterministic"
     assert plan1.daily_plan and plan2.daily_plan

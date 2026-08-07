@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from datetime import date
 
 from PySide6.QtCore import Qt, Signal
@@ -43,6 +44,12 @@ class BriefPanel(QFrame):
         self.title.setObjectName("cardTitle")
         root.addWidget(self.title)
 
+        self.rag_note = QLabel("Enhanced using uploaded study material")
+        self.rag_note.setObjectName("mutedLabel")
+        self.rag_note.setWordWrap(True)
+        self.rag_note.hide()
+        root.addWidget(self.rag_note)
+
         self.marker = QFrame()
         self.marker.setObjectName("markerLine")
         self.marker.setFixedWidth(72)
@@ -55,10 +62,15 @@ class BriefPanel(QFrame):
         self.helper.setWordWrap(True)
         root.addWidget(self.helper)
 
-        self.loading_label = QLabel("Creating a new plan...")
+        self.loading_label = QLabel("Creating your AI study plan...")
         self.loading_label.setObjectName("mutedLabel")
         self.loading_label.hide()
         root.addWidget(self.loading_label)
+
+        self.ai_source_label = QLabel("")
+        self.ai_source_label.setObjectName("mutedLabel")
+        self.ai_source_label.hide()
+        root.addWidget(self.ai_source_label)
 
         self.anchor_label = QLabel("")
         self.anchor_label.setObjectName("mutedLabel")
@@ -146,6 +158,9 @@ class BriefPanel(QFrame):
         self.helper.show()
         self.marker.show()
         self.loading_label.hide()
+        self.ai_source_label.hide()
+        self.ai_source_label.setText("")
+        self.rag_note.hide()
         self.anchor_label.hide()
         self.anchor_label.setText("")
         self.title.setText("Study Plan")
@@ -161,7 +176,9 @@ class BriefPanel(QFrame):
         self._loading = loading
         if loading:
             self.loading_label.setText(
-                "Creating a new plan..." if regenerating else "Creating study plan..."
+                "Creating a new plan..."
+                if regenerating
+                else "Creating your AI study plan..."
             )
             self.loading_label.show()
         else:
@@ -169,6 +186,17 @@ class BriefPanel(QFrame):
         self.btn_generate.setEnabled(not loading)
         self.btn_regenerate.setEnabled(not loading and self._has_brief)
         self.btn_telegram.setEnabled(not loading and self._has_brief)
+
+    def set_ai_source(self, ai_mode: str) -> None:
+        """Show source only when Ollama polish actually ran. Hide otherwise."""
+        mode = (ai_mode or "").strip().lower()
+        if mode == "ollama":
+            self.ai_source_label.setText("AI source: Ollama")
+            self.ai_source_label.show()
+        else:
+            # deterministic / rule_based_fallback / empty — no technical label in UI
+            self.ai_source_label.hide()
+            self.ai_source_label.setText("")
 
     def set_telegram_sending(self, sending: bool) -> None:
         if sending:
@@ -182,7 +210,15 @@ class BriefPanel(QFrame):
             self.btn_telegram.setEnabled(self._has_brief and not self._loading)
             self.btn_regenerate.setEnabled(self._has_brief and not self._loading)
 
-    def set_brief(self, text: str, plan: dict | None = None) -> None:
+    def set_brief(
+        self,
+        text: str,
+        plan: dict | None = None,
+        *,
+        ai_mode: str | None = None,
+        rag_enhanced: bool = False,
+        rag_message: str | None = None,
+    ) -> None:
         self._brief_text = (text or "").strip()
         self._plan = plan if isinstance(plan, dict) else None
         if not self._brief_text and not self._plan and not self._events:
@@ -190,8 +226,12 @@ class BriefPanel(QFrame):
             return
         self._has_brief = True
         self.setMaximumHeight(16777215)
-        self.setMinimumHeight(280)
-        self._render_notebook()
+        self.setMinimumHeight(200)
+        try:
+            self._render_notebook()
+        except Exception:
+            traceback.print_exc()
+            raise
         self.notebook.show()
         self.btn_generate.hide()
         self.helper.hide()
@@ -200,6 +240,16 @@ class BriefPanel(QFrame):
         self.btn_regenerate.show()
         self.btn_telegram.show()
         self.title.setText("Study Plan")
+        if rag_enhanced:
+            self.rag_note.setText("Enhanced using uploaded study material")
+            self.rag_note.show()
+        elif (rag_message or "").strip():
+            self.rag_note.setText(rag_message.strip())
+            self.rag_note.show()
+        else:
+            self.rag_note.hide()
+        if ai_mode is not None:
+            self.set_ai_source(ai_mode)
         # Keep planning_anchor in plan data for regenerate; do not show in UI
         self.anchor_label.hide()
         self.scroll_to_top()

@@ -1,12 +1,14 @@
-"""Compact priority + workload summary."""
+"""Fixed three-card summary strip — LTR geometry, RTL only on title text."""
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime
+from html import escape
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout
 
 from styles import category_style
 
@@ -33,28 +35,121 @@ def _workload_label(events_for_day: list[dict]) -> str:
     return "Light"
 
 
+class SummaryMiniCard(QFrame):
+    """One fixed summary cell. Parent layout stays LTR; only title may be RTL."""
+
+    def __init__(self, heading: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("summaryMiniCard")
+        self.setLayoutDirection(Qt.LeftToRight)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(140)
+        self.setMinimumHeight(88)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(0)
+        lay.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        lay.setDirection(QVBoxLayout.TopToBottom)
+
+        self.heading = QLabel(heading)
+        self.heading.setObjectName("summaryHeading")
+        self.heading.setLayoutDirection(Qt.LeftToRight)
+        self.heading.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.heading.setTextInteractionFlags(Qt.NoTextInteraction)
+
+        self.primary = QLabel("—")
+        self.primary.setObjectName("summaryPrimary")
+        self.primary.setLayoutDirection(Qt.LeftToRight)
+        self.primary.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.primary.setWordWrap(True)
+        self.primary.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.primary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        self.secondary = QLabel("")
+        self.secondary.setObjectName("summarySecondary")
+        self.secondary.setLayoutDirection(Qt.LeftToRight)
+        self.secondary.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.secondary.setWordWrap(True)
+        self.secondary.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.secondary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        lay.addWidget(self.heading)
+        lay.addSpacing(6)
+        lay.addWidget(self.primary)
+        lay.addSpacing(4)
+        lay.addWidget(self.secondary)
+
+    def set_heading(self, text: str) -> None:
+        self.heading.setText(text)
+
+    def set_values(
+        self,
+        primary: str,
+        secondary: str = "",
+        *,
+        primary_rtl_auto: bool = False,
+        secondary_html: bool = False,
+    ) -> None:
+        primary = (primary or "").strip() or "—"
+        secondary = (secondary or "").strip()
+
+        if primary_rtl_auto:
+            # RTL/LTR only inside the title line — card geometry stays LTR
+            self.primary.setTextFormat(Qt.RichText)
+            self.primary.setText(f'<span dir="auto">{escape(primary)}</span>')
+        else:
+            self.primary.setTextFormat(Qt.PlainText)
+            self.primary.setText(primary)
+
+        if secondary_html:
+            self.secondary.setTextFormat(Qt.RichText)
+            self.secondary.setText(secondary)
+        else:
+            self.secondary.setTextFormat(Qt.PlainText)
+            self.secondary.setText(secondary)
+        self.secondary.setVisible(bool(secondary))
+
+        # Cap title to ~2 lines via elision when extremely long
+        self._elide_primary_if_needed(primary if not primary_rtl_auto else primary)
+
+    def _elide_primary_if_needed(self, plain: str) -> None:
+        if len(plain) <= 80:
+            return
+        fm = QFontMetrics(self.primary.font())
+        width = max(self.primary.width(), self.minimumWidth() - 28)
+        if width < 40:
+            width = 220
+        # Approximate two-line budget
+        budget = width * 2
+        elided = fm.elidedText(plain, Qt.ElideRight, budget)
+        if elided != plain and not self.primary.textFormat() == Qt.RichText:
+            self.primary.setText(elided)
+        elif elided != plain:
+            self.primary.setText(f'<span dir="auto">{escape(elided)}</span>')
+
+
 class SummaryCard(QFrame):
+    """Three equal-width mini-cards: Upcoming | Highest priority | Overview."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setObjectName("summaryCard")
-        root = QHBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 10)
-        root.setSpacing(16)
+        self.setObjectName("summaryStrip")
+        self.setLayoutDirection(Qt.LeftToRight)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        self._blocks: list[tuple[QLabel, QLabel]] = []
-        for _ in range(3):
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            heading = QLabel()
-            heading.setObjectName("summaryHeading")
-            body = QLabel()
-            body.setObjectName("mutedLabel")
-            body.setWordWrap(True)
-            body.setTextFormat(Qt.RichText)
-            col.addWidget(heading)
-            col.addWidget(body)
-            root.addLayout(col, 1)
-            self._blocks.append((heading, body))
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+        root.setDirection(QHBoxLayout.LeftToRight)
+        root.setAlignment(Qt.AlignTop)
+
+        self.upcoming = SummaryMiniCard("Upcoming")
+        self.priority = SummaryMiniCard("Highest priority")
+        self.overview = SummaryMiniCard("Day overview")
+
+        for card in (self.upcoming, self.priority, self.overview):
+            root.addWidget(card, 1)
 
     def update_from_events(self, events: list[dict], mode: str = "today") -> None:
         if not events:
@@ -62,14 +157,14 @@ class SummaryCard(QFrame):
             return
 
         counts = Counter(str(e.get("category", "Other")) for e in events)
-        lines = [f"<b>{len(events)}</b> events"]
+        lines = [f"{len(events)} events"]
         for cat in ("Exam", "Assignment", "Project", "Study"):
             n = counts.get(cat, 0)
             if n:
                 label = cat.lower() + ("s" if n != 1 else "")
                 lines.append(f"{n} {label}")
-        self._blocks[0][0].setText("Upcoming")
-        self._blocks[0][1].setText("<br>".join(lines))
+        self.upcoming.set_heading("Upcoming")
+        self.upcoming.set_values(lines[0], "\n".join(lines[1:]) if len(lines) > 1 else "")
 
         priority_order = (
             "Exam",
@@ -86,16 +181,20 @@ class SummaryCard(QFrame):
             if items:
                 chosen = sorted(items, key=lambda e: str(e.get("start") or ""))[0]
                 break
-        self._blocks[1][0].setText("Highest priority")
+
+        self.priority.set_heading("Highest priority")
         if chosen:
             style = category_style(str(chosen.get("category", "Other")))
-            self._blocks[1][1].setText(
-                f"{chosen.get('title', 'Untitled')}<br>"
-                f"<span style='color:{style['fg']}; font-weight:600'>"
-                f"{chosen.get('category')}</span>"
+            cat = str(chosen.get("category") or "")
+            title = str(chosen.get("title") or "Untitled")
+            self.priority.set_values(
+                title,
+                f"<span style='color:{style['fg']}; font-weight:600'>{escape(cat)}</span>",
+                primary_rtl_auto=True,
+                secondary_html=True,
             )
         else:
-            self._blocks[1][1].setText("—")
+            self.priority.set_values("—", "")
 
         by_day: dict[str, list[dict]] = defaultdict(list)
         for event in events:
@@ -108,11 +207,11 @@ class SummaryCard(QFrame):
                 continue
 
         if mode == "today" or len(by_day) <= 1:
-            self._blocks[2][0].setText("Day overview")
+            self.overview.set_heading("Day overview")
             only = next(iter(by_day.values()), events)
-            self._blocks[2][1].setText(_workload_label(only))
+            self.overview.set_values(_workload_label(only), "")
         else:
-            self._blocks[2][0].setText("Busy dates")
+            self.overview.set_heading("Busy dates")
             day_labels = []
             for day, day_events in sorted(
                 by_day.items(),
@@ -127,8 +226,8 @@ class SummaryCard(QFrame):
                     key=lambda item: (-len(item[1]), item[0]),
                 )[:2]:
                     day_labels.append(f"{day} · {_workload_label(day_events)}")
-            self._blocks[2][1].setText(
-                "<br>".join(day_labels) if day_labels else "Even pace"
-            )
+            primary = day_labels[0] if day_labels else "Even pace"
+            secondary = "\n".join(day_labels[1:]) if len(day_labels) > 1 else ""
+            self.overview.set_values(primary, secondary)
 
         self.show()

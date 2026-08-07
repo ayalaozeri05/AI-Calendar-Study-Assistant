@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from uuid import UUID
@@ -15,9 +17,15 @@ from app.schemas.brief_schema import BriefResponse, BriefType, SendTelegramRespo
 from app.schemas.calendar_schema import ClassifiedCalendarEvent, EventCategory
 from app.services.ai_recommendation_service import AiRecommendationService
 from app.services.calendar_service import CalendarService
+from app.services.planning_errors import (
+    CalendarNotSyncedError,
+    NoEventsInRangeError,
+)
 from app.services.telegram_message_splitter import split_telegram_message
 from app.services.telegram_plan_formatter import format_plan_for_telegram
 from app.services.user_service import UserService
+
+logger = logging.getLogger(__name__)
 
 _CATEGORY_ORDER = (
     EventCategory.EXAM,
@@ -97,16 +105,73 @@ class StudyBriefService:
         if start > end:
             raise ValueError("start_date must be on or before end_date.")
 
+        local_tz = datetime.now().astimezone().tzinfo
+        logger.info(
+            "plan_request_started user_id=%s range=%s..%s tz=%s",
+            user_id,
+            start.isoformat(),
+            end.isoformat(),
+            getattr(local_tz, "key", str(local_tz)),
+        )
+
+        # Rehydrate in-memory sync after backend restart when Google is still connected.
+        # Synced events are process-memory only — OAuth tokens persist; event cache does not.
+        stored = self._calendar.ensure_session_events(user_id, days_ahead=62)
+        stored_count = len(stored)
+        session_synced = self._calendar.has_session_sync(user_id)
+
+        diagnostics = {
+            "user_id": str(user_id),
+            "range_start": start.isoformat(),
+            "range_end": end.isoformat(),
+            "timezone": str(getattr(local_tz, "key", local_tz)),
+            "event_source": "in_memory_sync",
+            "stored_events": stored_count,
+            "matching_event_count": 0,
+            "session_synced": session_synced,
+            "ollama_called": False,
+        }
+
+        if not session_synced:
+            logger.info(
+                "plan_generation_skipped_reason=calendar_not_synced user_id=%s "
+                "stored_events=%s",
+                user_id,
+                stored_count,
+            )
+            raise CalendarNotSyncedError(
+                "Calendar data is not available yet.\n"
+                "Please sync Google Calendar first.",
+                diagnostics=diagnostics,
+            )
+
         events = self._calendar.get_events_in_range(user_id, start, end)
-        if not events:
-            raise ValueError(
-                "No events are scheduled for the selected dates.\n"
-                "Sync Google Calendar first, then try again."
+        matching_count = len(events)
+        diagnostics["matching_event_count"] = matching_count
+
+        if matching_count == 0:
+            logger.info(
+                "plan_generation_skipped_reason=no_events_in_range user_id=%s "
+                "range=%s..%s stored_events=%s matching_event_count=0",
+                user_id,
+                start.isoformat(),
+                end.isoformat(),
+                stored_count,
+            )
+            raise NoEventsInRangeError(
+                "No events were found in the selected date range.\n"
+                "Choose another range.",
+                diagnostics=diagnostics,
             )
 
         # Use local timezone for "today" / future-day decisions
         local_now = datetime.now().astimezone()
-        plan, plan_text, ai_mode = self._ai.generate_study_plan(
+        t_gen = time.perf_counter()
+        logger.info(
+            "stage=deterministic_schedule_started event_count=%s",
+            matching_count,
+        )
+        plan, plan_text, ai_mode, warnings = self._ai.generate_study_plan(
             events,
             start=start,
             end=end,
@@ -116,6 +181,29 @@ class StudyBriefService:
             variation_seed=variation_seed,
             planning_anchor=planning_anchor,
         )
+        gen_ms = (time.perf_counter() - t_gen) * 1000
+
+        daily_count = len(plan.daily_plan or [])
+        block_count = sum(len(d.items) for d in (plan.daily_plan or []))
+        ollama_called = bool(getattr(self._ai, "last_ollama_called", False)) or (
+            ai_mode == "ollama"
+        )
+        logger.info(
+            "stage=response_ready duration_ms=%.0f ai_mode=%s event_count=%s "
+            "day_count=%s block_count=%s ollama_called=%s ai_polish_enabled=%s",
+            gen_ms,
+            ai_mode,
+            matching_count,
+            daily_count,
+            block_count,
+            ollama_called,
+            bool(getattr(settings, "ai_polish_enabled", False)),
+        )
+        if daily_count <= 0 or block_count <= 0:
+            raise RuntimeError(
+                "Schedule generation produced an empty plan. "
+                "Try syncing Google Calendar and choosing another range."
+            )
 
         title = label or f"Study Plan — {start.isoformat()} to {end.isoformat()}"
         text = f"{title}\n\n{plan_text}"
@@ -137,7 +225,38 @@ class StudyBriefService:
             ai_mode=ai_mode,
             plan=plan,
             planning_anchor=anchor,
-            meta={"ai_mode": ai_mode, "planning_anchor": anchor},
+            meta={
+                "ai_mode": ai_mode,
+                "planning_anchor": anchor,
+                "matching_event_count": matching_count,
+                "stored_events": stored_count,
+                "fallback_reason": getattr(self._ai, "last_fallback_reason", None),
+                "ollama_called": ollama_called,
+                "ollama_answered": getattr(self._ai, "last_ollama_answered", None),
+                "ollama_elapsed_sec": getattr(self._ai, "last_ollama_elapsed_sec", None),
+                "generation_duration_ms": round(gen_ms),
+                "day_count": daily_count,
+                "block_count": block_count,
+                "warnings": warnings,
+                "ai_polish_enabled": bool(
+                    getattr(settings, "ai_polish_enabled", False)
+                ),
+                "polish_enabled": bool(getattr(settings, "polish_enabled", False)),
+                "rag_used": bool(getattr(self._ai, "last_rag_used", False)),
+                "rag_topic_count": int(
+                    getattr(self._ai, "last_rag_topic_count", 0) or 0
+                ),
+                "rag_topics": list(getattr(self._ai, "last_rag_topics", []) or []),
+                "retrieved_chunk_count": int(
+                    getattr(self._ai, "last_rag_chunk_count", 0) or 0
+                ),
+                "matched_documents": list(
+                    getattr(self._ai, "last_rag_matched_documents", []) or []
+                ),
+                "rag_document": getattr(self._ai, "last_rag_document", None),
+                "rag_match_reason": getattr(self._ai, "last_rag_match_reason", None),
+                "rag_message": getattr(self._ai, "last_rag_message", None),
+            },
         )
 
     def send_brief_to_telegram(

@@ -80,13 +80,13 @@ def test_rule_based_fallback_prioritizes_same_day_assignment():
         _event("Reversing", EventCategory.ASSIGNMENT, days=1, description="Section A"),
     ]
     today = datetime.now(timezone.utc).date()
-    plan, text, mode = AiRecommendationService().generate_study_plan(
+    plan, text, mode, _ = AiRecommendationService().generate_study_plan(
         events,
         start=today,
         end=today + timedelta(days=10),
         force_fallback=True,
     )
-    assert mode == "rule_based_fallback"
+    assert mode == "deterministic"
     assert plan.daily_plan
     assert plan.priority_item is not None
     assert "Reversing" in plan.priority_item.title
@@ -103,13 +103,13 @@ def test_exam_in_eight_days_gets_multi_day_prep():
         _event("OS Exam", EventCategory.EXAM, days=8, description="Operating Systems"),
     ]
     today = datetime.now(timezone.utc).date()
-    plan, _, mode = AiRecommendationService().generate_study_plan(
+    plan, _, mode, _ = AiRecommendationService().generate_study_plan(
         events,
         start=today,
         end=today + timedelta(days=10),
         force_fallback=True,
     )
-    assert mode == "rule_based_fallback"
+    assert mode == "deterministic"
     days_with_items = [d.date for d in plan.daily_plan if d.items]
     assert len(days_with_items) >= 2
 
@@ -121,7 +121,7 @@ def test_language_detection_hebrew():
     ]
     assert detect_language(events) == "he"
     today = datetime.now(timezone.utc).date()
-    plan, text, _ = AiRecommendationService().generate_study_plan(
+    plan, text, _, _ = AiRecommendationService().generate_study_plan(
         events, start=today, end=today + timedelta(days=5), force_fallback=True
     )
     # Hebrew plan should contain Hebrew letters in summary or tips
@@ -136,7 +136,7 @@ def test_language_detection_english():
     ]
     assert detect_language(events) == "en"
     today = datetime.now(timezone.utc).date()
-    plan, text, _ = AiRecommendationService().generate_study_plan(
+    plan, text, _, _ = AiRecommendationService().generate_study_plan(
         events, start=today, end=today + timedelta(days=5), force_fallback=True
     )
     blob = (plan.summary or "") + text
@@ -146,7 +146,7 @@ def test_language_detection_english():
 def test_format_plan_text_readable_not_json():
     events = [_event("Homework", EventCategory.ASSIGNMENT, description="Done")]
     today = datetime.now(timezone.utc).date()
-    plan, text, _ = AiRecommendationService().generate_study_plan(
+    plan, text, _, _ = AiRecommendationService().generate_study_plan(
         events, start=today, end=today, force_fallback=True
     )
     formatted = format_plan_text(plan, language="en")

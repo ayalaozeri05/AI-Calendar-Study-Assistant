@@ -6,6 +6,8 @@ Maps **Windows Systems Engineering / course requirements** to **AI Calendar Stud
 
 **Demo target:** Thursday evening
 
+**Stable demo default:** `AI_POLISH_ENABLED=false` → immediate deterministic plans on `http://127.0.0.1:8000`. Ollama remains installed for verification / future RAG.
+
 ---
 
 ## Desktop application
@@ -36,8 +38,8 @@ Maps **Windows Systems Engineering / course requirements** to **AI Calendar Stud
 |---|-------------|-------------------------------|--------|
 | 9 | Gateway classes | Supabase, Google Calendar (OAuth), Telegram gateways | `[x]` |
 | 10 | External service integration | Google OAuth sync + Telegram send | `[x]` |
-| 11 | Ollama in Docker | Placeholder `AiRecommendationService`; Ollama later | `[~]` stub |
-| 12 | LangChain + RAG / Chroma | Deferred post-demo; `rag/` package retained | `[ ]` deferred |
+| 11 | Ollama in Docker | `docker-compose.yml` + `OllamaGateway` + `/health/ollama`; stable demo uses `AI_POLISH_ENABLED=false` | `[x]` |
+| 12 | LangChain + RAG / Chroma | Ollama polish optional; **RAG implemented** (`/rag/upload`, `/rag/ask`, Chroma) | `[x]` RAG / `[~]` polish |
 | 13 | Telegram integration | `TelegramGateway` + `/briefs/send-telegram` | `[x]` |
 
 ---

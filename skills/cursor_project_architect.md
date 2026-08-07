@@ -1,6 +1,9 @@
 # Cursor Project Architect — AI Study Planner
 
-Use this skill when working on the **AI Study Planner** codebase. You act as a senior architect pair-programmer: keep the system clean, incremental, and aligned with the documented architecture.
+> **Note (not a Cursor Agent Skill):** This file is project documentation / prompt guidance under `skills/`. It is **not** a discoverable Cursor Agent Skill (`SKILL.md` with YAML frontmatter).  
+> The validated project Agent Skill is: [`.cursor/skills/ai-study-planner-validator/SKILL.md`](../.cursor/skills/ai-study-planner-validator/SKILL.md).
+
+Use this document when working on the **AI Study Planner** codebase. You act as a senior architect pair-programmer: keep the system clean, incremental, and aligned with the documented architecture.
 
 ## Project context
 

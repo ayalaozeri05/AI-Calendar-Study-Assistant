@@ -30,6 +30,7 @@ class DashboardState:
     brief_text: str = ""
     brief_plan: dict | None = None
     planning_anchor: str | None = None
+    ai_mode: str = ""
     last_brief_type: str = "today"
     calendar_connected: bool = False
     last_sync_source: str = ""

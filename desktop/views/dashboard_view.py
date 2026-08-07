@@ -22,6 +22,8 @@ class DashboardView(QMainWindow):
     generate_brief_requested = Signal()
     regenerate_brief_requested = Signal()
     send_telegram_requested = Signal()
+    rag_upload_requested = Signal(str, str)
+    rag_remove_requested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -72,6 +74,8 @@ class DashboardView(QMainWindow):
         self.planner_page.send_telegram_requested.connect(self.send_telegram_requested.emit)
         self.planner_page.sync_requested.connect(self.sync_calendar_requested.emit)
         self.planner_page.back_requested.connect(self.show_calendar)
+        self.planner_page.rag_upload_requested.connect(self.rag_upload_requested.emit)
+        self.planner_page.rag_remove_requested.connect(self.rag_remove_requested.emit)
 
     def show_start(self) -> None:
         self.stack.setCurrentWidget(self.start_page)
@@ -104,6 +108,10 @@ class DashboardView(QMainWindow):
             else:
                 lines.append(f"Last synced: {when.strftime('%d %b %H:%M')}")
         self.planner_page.set_header_status("\n".join(lines))
+        self.planner_page.set_sync_context(
+            connected=self._calendar_connected,
+            has_synced=self._last_synced is not None,
+        )
 
     def set_student_header(self, name: str, email: str) -> None:
         # Keep demo profile email internal; display Google account when available
@@ -138,7 +146,18 @@ class DashboardView(QMainWindow):
             return
         if is_error:
             kind = "error"
-        elif any(k in lowered for k in ("no events", "empty", "not connected")):
+        elif any(
+            k in lowered
+            for k in (
+                "no events",
+                "empty",
+                "not connected",
+                "not available yet",
+                "choose another range",
+                "rule-based",
+                "timed out",
+            )
+        ):
             kind = "warning"
         else:
             kind = "success"
@@ -153,6 +172,10 @@ class DashboardView(QMainWindow):
         self.calendar_page.set_syncing(syncing)
 
     def populate_events(self, events: list[dict]) -> None:
+        self.planner_page.set_sync_context(
+            connected=self._calendar_connected,
+            has_synced=self._last_synced is not None or self._calendar_connected,
+        )
         self.planner_page.populate_events(events)
 
     def set_brief_text(
@@ -160,15 +183,28 @@ class DashboardView(QMainWindow):
         text: str,
         brief_type: str | None = None,
         plan: dict | None = None,
+        ai_mode: str | None = None,
+        *,
+        rag_enhanced: bool = False,
+        rag_message: str | None = None,
     ) -> None:
         _ = brief_type
-        self.planner_page.set_brief(text, plan=plan)
+        self.planner_page.set_brief(
+            text,
+            plan=plan,
+            ai_mode=ai_mode,
+            rag_enhanced=rag_enhanced,
+            rag_message=rag_message,
+        )
 
     def current_brief_plan(self) -> dict | None:
         return self.planner_page.brief.current_plan()
 
     def set_plan_loading(self, loading: bool, *, regenerating: bool = False) -> None:
         self.planner_page.brief.set_loading(loading, regenerating=regenerating)
+
+    def set_ai_source(self, ai_mode: str) -> None:
+        self.planner_page.brief.set_ai_source(ai_mode)
 
     def set_telegram_sending(self, sending: bool) -> None:
         self.planner_page.brief.set_telegram_sending(sending)

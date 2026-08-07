@@ -29,6 +29,8 @@ chroma_db/
 chroma/
 chroma_data/
 data/chroma/
+backend/chroma/
+backend/uploads/
 *.db
 
 # IDE
@@ -37,5 +39,6 @@ data/chroma/
 
 # Logs and OS
 *.log
+logs/
 .DS_Store
 Thumbs.db

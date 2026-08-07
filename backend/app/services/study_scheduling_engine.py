@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import re
+import time as pytime
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, time, timezone
 from typing import Literal
 
+from app.rag.document_matcher import course_lookup_key
 from app.schemas.brief_schema import (
     DailyPlan,
     PriorityItem,
@@ -28,6 +30,16 @@ _DAY_START = time(9, 0)
 _DAY_END = time(21, 30)
 _LUNCH = (time(12, 15), time(13, 15))
 _DINNER = (time(19, 30), time(20, 15))
+
+# Rest-like kinds — must not stack with unexplained gaps between them.
+_REST_KINDS = frozenset({"break", "recovery", "meal"})
+_GAP_MERGE_MIN = 30  # merge/relabel rest when gap is shorter than this
+_LIGHT_TASK_MIN = 30
+_STUDY_FILL_MIN = 45
+_MAX_FOCUS_MIN = 150
+_MAX_NORMALIZE_PASSES = 3
+_MAX_REPAIR_PASSES = 2
+_MAX_BLOCKS_PER_DAY = 30
 
 # Pedagogical stages — varied coach-style activities
 _STAGE_EN = {
@@ -122,10 +134,12 @@ class StudySchedulingEngine:
         language: str = "en",
         variation_seed: int = 0,
         planning_anchor: datetime | None = None,
+        rag_topics: dict[str, list[str]] | None = None,
     ) -> StructuredStudyPlan:
         now = _aware(now or datetime.now().astimezone())
         today = now.date()
         seed = int(variation_seed or 0)
+        topic_hints = rag_topics or {}
 
         if planning_anchor is not None:
             saved = ceil_to_15_minutes(_aware(planning_anchor))
@@ -141,7 +155,9 @@ class StudySchedulingEngine:
         all_events = list(events)
         # Global targets at "now" only for summary; per-day filtering is authoritative
         global_targets = _select_targets(
-            [e for e in all_events if not _already_ended(e, now)], now
+            [e for e in all_events if not _already_ended(e, now)],
+            now,
+            rag_topics=topic_hints,
         )
 
         placed_by_day: dict[str, list[_Placed]] = {}
@@ -156,6 +172,7 @@ class StudySchedulingEngine:
                 hebrew=hebrew,
                 seed=seed + day_index * 17,
                 day_index=day_index,
+                rag_topics=topic_hints,
             )
             if blocks:
                 placed_by_day[day.isoformat()] = blocks
@@ -202,6 +219,7 @@ class StudySchedulingEngine:
         hebrew: bool,
         seed: int,
         day_index: int,
+        rag_topics: dict[str, list[str]] | None = None,
     ) -> list[_Placed]:
         # Timeline for TODAY always starts at max(now, 09:00) via today_start
         day_cursor = (
@@ -215,7 +233,9 @@ class StudySchedulingEngine:
         fixed = _fixed_events_for_day(all_events, day, now.tzinfo, now=now_aware)
         recovery = _exam_recovery_blocks(all_events, day, now.tzinfo, hebrew, now=now_aware)
 
-        day_targets = _select_targets_for_moment(all_events, day_cursor)
+        day_targets = _select_targets_for_moment(
+            all_events, day_cursor, rag_topics=rag_topics
+        )
 
         free = _free_slots_for_day(
             day,
@@ -250,6 +270,18 @@ class StudySchedulingEngine:
         # Hard filter: never show anything that already ended
         if day == now.date():
             merged = [p for p in merged if p.end > now_aware]
+
+        # Deterministic geometry fix before any LLM polish.
+        remaining_workload = sum(max(d.minutes, 0) for d in demand)
+        merged = _normalize_day_timeline(
+            merged,
+            day=day,
+            now=now_aware,
+            hebrew=hebrew,
+            remaining_workload_min=remaining_workload,
+            demand=demand,
+            seed=seed,
+        )
         return merged
 
 
@@ -259,13 +291,19 @@ class StudySchedulingEngine:
 
 
 def _select_targets(
-    events: list[ClassifiedCalendarEvent], moment: datetime
+    events: list[ClassifiedCalendarEvent],
+    moment: datetime,
+    *,
+    rag_topics: dict[str, list[str]] | None = None,
 ) -> list[_Target]:
-    return _select_targets_for_moment(events, moment)
+    return _select_targets_for_moment(events, moment, rag_topics=rag_topics)
 
 
 def _select_targets_for_moment(
-    events: list[ClassifiedCalendarEvent], moment: datetime
+    events: list[ClassifiedCalendarEvent],
+    moment: datetime,
+    *,
+    rag_topics: dict[str, list[str]] | None = None,
 ) -> list[_Target]:
     """Only exams/assignments/projects that have not started/ended yet at moment."""
     targets: list[_Target] = []
@@ -294,17 +332,40 @@ def _select_targets_for_moment(
             weight = 100.0 / days
         else:
             weight = 80.0 / days
+        desc_topics = _topics_from_description(event.description)
+        hints = rag_topics or {}
+        hint_topics = list(hints.get(str(event.id), []) or [])
+        if not hint_topics:
+            hint_topics = list(hints.get(course_lookup_key(event.title), []) or [])
         targets.append(
             _Target(
                 event=event,
                 kind=kind,
                 due=due,
-                topics=_topics_from_description(event.description),
+                topics=_merge_topics(hint_topics, desc_topics),
                 weight=weight,
             )
         )
     targets.sort(key=lambda t: (-t.weight, t.due))
     return targets
+
+
+def _merge_topics(primary: list[str], secondary: list[str], *, limit: int = 12) -> list[str]:
+    """Prefer RAG topics, then description topics; de-dupe case-insensitively."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for topic in list(primary or []) + list(secondary or []):
+        text = (topic or "").strip()
+        if len(text) < 2:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _topics_from_description(description: str | None) -> list[str]:
@@ -578,10 +639,15 @@ def _build_demand(
 
 
 def _exam_recovery_minutes(event: ClassifiedCalendarEvent) -> int:
+    """Default 75m after a normal exam; up to 120m for long/demanding exams."""
     start = _aware(event.start)
     end = _aware(event.end) if event.end else start + timedelta(hours=1)
     duration_h = max((end - start).total_seconds() / 3600.0, 0.5)
-    return 180 if duration_h > 2 else 120
+    if duration_h > 2.5:
+        return 120
+    if duration_h > 2:
+        return 105
+    return 75
 
 
 def _exam_recovery_blocks(
@@ -592,8 +658,9 @@ def _exam_recovery_blocks(
     *,
     now: datetime | None = None,
 ) -> list[_Placed]:
-    """Visible recovery after exams: travel home + lunch + mental break."""
+    """Visible recovery after exams: travel home + mental break (lunch stays separate)."""
     placed: list[_Placed] = []
+    lunch_start = datetime.combine(day, _LUNCH[0], tzinfo=tz)
     for event in events:
         if event.category != EventCategory.EXAM:
             continue
@@ -602,6 +669,11 @@ def _exam_recovery_blocks(
         if start.date() != day and end.date() != day:
             continue
         rec_end = end + timedelta(minutes=_exam_recovery_minutes(event))
+        # Prefer a coherent block that ends exactly at lunch when lunch follows soon.
+        if end < lunch_start <= rec_end + timedelta(minutes=_GAP_MERGE_MIN):
+            rec_end = max(rec_end, lunch_start)
+            if lunch_start - end <= timedelta(minutes=120):
+                rec_end = lunch_start
         if now is not None and rec_end <= now:
             continue
         block_start = end
@@ -614,9 +686,9 @@ def _exam_recovery_blocks(
                 start=block_start,
                 end=rec_end,
                 kind="recovery",
-                title="Recovery" if not hebrew else "התאוששות",
+                title="Recovery / travel home" if not hebrew else "התאוששות / חזרה הביתה",
                 action=(
-                    "Travel home, eat, and take a real mental break. No studying yet."
+                    "Travel home and take a real mental break. No studying yet."
                     if not hebrew
                     else "התאוששות_ACTION"
                 ),
@@ -706,15 +778,13 @@ def _free_slots_for_day(
     busy = _busy_with_buffers(day, blockers, tz)
     lunch_start = datetime.combine(day, _LUNCH[0], tzinfo=tz)
     lunch_end = datetime.combine(day, _LUNCH[1], tzinfo=tz)
-    # Skip duplicate lunch if exam recovery already covers it
-    if not any(b.start <= lunch_start and b.end >= lunch_end for b in busy):
+    # Skip lunch reservation when recovery/busy already overlaps the lunch window
+    if not any(b.start < lunch_end and b.end > lunch_start for b in busy):
         busy.append(_Interval(lunch_start, lunch_end))
-    busy.append(
-        _Interval(
-            datetime.combine(day, _DINNER[0], tzinfo=tz),
-            datetime.combine(day, _DINNER[1], tzinfo=tz),
-        )
-    )
+    dinner_start = datetime.combine(day, _DINNER[0], tzinfo=tz)
+    dinner_end = datetime.combine(day, _DINNER[1], tzinfo=tz)
+    if not any(b.start < dinner_end and b.end > dinner_start for b in busy):
+        busy.append(_Interval(dinner_start, dinner_end))
 
     merged = _merge(busy)
     window = _Interval(day_start, day_end)
@@ -949,7 +1019,20 @@ def _fill_day(
             cursor = end
 
             br = _break_for(duration)
-            if q and cursor + timedelta(minutes=br + 45) <= gap_end:
+            # Avoid a short break that would sit next to lunch/dinner with a junk gap.
+            meal_edges = (
+                datetime.combine(day, _LUNCH[0], tzinfo=cursor.tzinfo),
+                datetime.combine(day, _DINNER[0], tzinfo=cursor.tzinfo),
+            )
+            near_meal = any(
+                0 <= (edge - cursor).total_seconds() / 60.0 < (br + _GAP_MERGE_MIN)
+                for edge in meal_edges
+            )
+            if (
+                q
+                and not near_meal
+                and cursor + timedelta(minutes=br + 45) <= gap_end
+            ):
                 br_end = cursor + timedelta(minutes=br)
                 if need.hard_deadline is None or br_end <= need.hard_deadline:
                     placed.append(
@@ -1047,6 +1130,640 @@ def _pick_duration(available: int, want: int, seed: int) -> int:
     return max(20, min(available, want))
 
 
+# ---------------------------------------------------------------------------
+# Timeline normalization + validation (engine-owned geometry)
+# ---------------------------------------------------------------------------
+
+
+def _is_rest_like(block: _Placed) -> bool:
+    if block.kind in _REST_KINDS:
+        return True
+    title = (block.title or "").lower()
+    return any(
+        token in title
+        for token in (
+            "break",
+            "recovery",
+            "lunch",
+            "dinner",
+            "travel",
+            "free time",
+            "flexible",
+            "personal time",
+            "הפסקה",
+            "התאוששות",
+            "צהריים",
+            "ערב",
+        )
+    )
+
+
+def _gap_minutes(a: _Placed, b: _Placed) -> float:
+    return (b.start - a.end).total_seconds() / 60.0
+
+
+def _merge_rest_pair(a: _Placed, b: _Placed, *, hebrew: bool) -> _Placed:
+    """Merge two rest-like blocks into one coherent recovery/meal/break."""
+    start = min(a.start, b.start)
+    end = max(a.end, b.end)
+    kinds = {a.kind, b.kind}
+    if "meal" in kinds and "recovery" in kinds:
+        # Keep recovery up to meal start; caller should not merge meal+recovery.
+        # Prefer the meal title if both are meals.
+        pass
+    if a.kind == "meal" and b.kind == "meal":
+        title = a.title if "Lunch" in a.title or "צהריים" in a.title else b.title
+        return _Placed(
+            start=start,
+            end=end,
+            kind="meal",
+            title=title,
+            action=a.action or b.action,
+            reason="",
+            label="Meal",
+        )
+    if "recovery" in kinds or a.kind == "break" or b.kind == "break":
+        return _Placed(
+            start=start,
+            end=end,
+            kind="recovery",
+            title=(
+                "Recovery / travel home"
+                if not hebrew
+                else "התאוששות / חזרה הביתה"
+            ),
+            action=(
+                "Travel home and take a real mental break. No studying yet."
+                if not hebrew
+                else "התאוששות_ACTION"
+            ),
+            reason="",
+            event_id=a.event_id or b.event_id,
+            label="Recovery",
+            category=a.category or b.category or "Exam",
+        )
+    return _Placed(
+        start=start,
+        end=end,
+        kind="break",
+        title="Break" if not hebrew else "הפסקה",
+        action=a.action or b.action,
+        reason="",
+        label="Break",
+    )
+
+
+def _snap_recovery_to_meals(blocks: list[_Placed], day: date, hebrew: bool) -> list[_Placed]:
+    """Ensure recovery abuts lunch/dinner when a short gap would otherwise appear."""
+    if not blocks:
+        return blocks
+    tz = blocks[0].start.tzinfo
+    lunch_start = datetime.combine(day, _LUNCH[0], tzinfo=tz)
+    out = sorted(blocks, key=lambda p: p.start)
+    changed: list[_Placed] = []
+    for p in out:
+        if p.kind != "recovery":
+            changed.append(p)
+            continue
+        # Extend recovery to lunch start when the silent gap would be < 30 min
+        if p.end < lunch_start:
+            gap = (lunch_start - p.end).total_seconds() / 60.0
+            if 0 < gap < _GAP_MERGE_MIN:
+                p = _Placed(
+                    start=p.start,
+                    end=lunch_start,
+                    kind=p.kind,
+                    title=p.title
+                    if "travel" in (p.title or "").lower()
+                    or "חזרה" in (p.title or "")
+                    else (
+                        "Recovery / travel home"
+                        if not hebrew
+                        else "התאוששות / חזרה הביתה"
+                    ),
+                    action=p.action,
+                    reason=p.reason,
+                    event_id=p.event_id,
+                    phase=p.phase,
+                    category=p.category,
+                    label=p.label,
+                )
+        changed.append(p)
+    return changed
+
+
+def _merge_near_rest_blocks(blocks: list[_Placed], *, hebrew: bool) -> list[_Placed]:
+    """Merge overlapping / touching / <30min-apart rest-like blocks (not meal+recovery)."""
+    if not blocks:
+        return []
+    ordered = sorted(blocks, key=lambda p: (p.start, p.end))
+    out: list[_Placed] = [ordered[0]]
+    for cur in ordered[1:]:
+        prev = out[-1]
+        gap = _gap_minutes(prev, cur)
+        both_rest = _is_rest_like(prev) and _is_rest_like(cur)
+        meal_recovery = {prev.kind, cur.kind} == {"meal", "recovery"} or (
+            prev.kind == "recovery" and cur.kind == "meal"
+        ) or (prev.kind == "meal" and cur.kind == "recovery")
+        if both_rest and meal_recovery and gap <= 0:
+            # Overlap recovery into lunch — clip recovery to meal start
+            if prev.kind == "recovery" and cur.kind == "meal":
+                if prev.end > cur.start:
+                    out[-1] = _Placed(
+                        start=prev.start,
+                        end=cur.start,
+                        kind=prev.kind,
+                        title=prev.title,
+                        action=prev.action,
+                        reason=prev.reason,
+                        event_id=prev.event_id,
+                        phase=prev.phase,
+                        category=prev.category,
+                        label=prev.label,
+                    )
+                    if out[-1].end <= out[-1].start:
+                        out.pop()
+                out.append(cur)
+                continue
+            if prev.kind == "meal" and cur.kind == "recovery":
+                out.append(cur)
+                continue
+        if both_rest and meal_recovery and 0 < gap < _GAP_MERGE_MIN:
+            # Extend recovery to touch meal — keep two labelled cards, no blank gap
+            if prev.kind == "recovery" and cur.kind == "meal":
+                out[-1] = _Placed(
+                    start=prev.start,
+                    end=cur.start,
+                    kind="recovery",
+                    title=(
+                        "Recovery / travel home"
+                        if not hebrew
+                        else "התאוששות / חזרה הביתה"
+                    ),
+                    action=prev.action,
+                    reason=prev.reason,
+                    event_id=prev.event_id,
+                    label="Recovery",
+                    category=prev.category or "Exam",
+                )
+                out.append(cur)
+                continue
+            if prev.kind == "meal" and cur.kind == "recovery":
+                out.append(cur)
+                continue
+        if both_rest and not meal_recovery and gap < _GAP_MERGE_MIN:
+            out[-1] = _merge_rest_pair(prev, cur, hebrew=hebrew)
+            continue
+        if gap < 0 and prev.kind == "calendar":
+            # Never shrink fixed calendar events — shift/drop overlapping soft blocks
+            if cur.kind == "calendar":
+                out.append(cur)
+            elif cur.end > prev.end:
+                out.append(
+                    _Placed(
+                        start=max(cur.start, prev.end),
+                        end=cur.end,
+                        kind=cur.kind,
+                        title=cur.title,
+                        action=cur.action,
+                        reason=cur.reason,
+                        event_id=cur.event_id,
+                        phase=cur.phase,
+                        category=cur.category,
+                        label=cur.label,
+                    )
+                )
+            continue
+        if gap < 0 and cur.kind != "calendar" and prev.kind != "calendar":
+            out[-1] = _Placed(
+                start=prev.start,
+                end=max(prev.end, cur.end),
+                kind=prev.kind if prev.kind != "break" else cur.kind,
+                title=prev.title,
+                action=prev.action or cur.action,
+                reason=prev.reason or cur.reason,
+                event_id=prev.event_id or cur.event_id,
+                phase=prev.phase or cur.phase,
+                category=prev.category or cur.category,
+                label=prev.label or cur.label,
+            )
+            continue
+        out.append(cur)
+    return [p for p in out if p.end > p.start]
+
+
+def _drop_redundant_breaks_before_rest(
+    blocks: list[_Placed], *, hebrew: bool = False
+) -> list[_Placed]:
+    """
+    Remove/replace breaks that sit before meal/recovery.
+
+    A short BREAK then a silent gap then MEAL is invalid — turn it into one
+    recovery block that abuts the meal (or drop the break when gap < 30).
+    """
+    ordered = sorted(blocks, key=lambda p: p.start)
+    out: list[_Placed] = []
+    i = 0
+    while i < len(ordered):
+        block = ordered[i]
+        if block.kind == "break" and i + 1 < len(ordered):
+            nxt = ordered[i + 1]
+            gap = _gap_minutes(block, nxt)
+            if nxt.kind in ("meal", "recovery") and 0 <= gap < 90:
+                # No study/calendar between — coalesce into recovery until meal
+                out.append(
+                    _Placed(
+                        start=block.start,
+                        end=nxt.start if nxt.kind == "meal" else max(block.end, nxt.end),
+                        kind="recovery",
+                        title=(
+                            "Recovery / travel home"
+                            if not hebrew
+                            else "התאוששות / חזרה הביתה"
+                        ),
+                        action=(
+                            "Travel home and take a real mental break. No studying yet."
+                            if not hebrew
+                            else "התאוששות_ACTION"
+                        ),
+                        reason="",
+                        label="Recovery",
+                        category="Exam",
+                    )
+                )
+                if nxt.kind == "recovery":
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if gap < _GAP_MERGE_MIN and _is_rest_like(nxt):
+                i += 1
+                continue
+        out.append(block)
+        i += 1
+    return out
+
+
+def _active_window(day: date, now: datetime, blocks: list[_Placed]) -> _Interval:
+    tz = now.tzinfo
+    start = datetime.combine(day, _DAY_START, tzinfo=tz)
+    end = datetime.combine(day, _DAY_END, tzinfo=tz)
+    if day == now.date():
+        start = max(start, ceil_to_15_minutes(now))
+    if blocks:
+        start = min(start, min(b.start for b in blocks))
+        # Keep day start floor for future days
+        if day != now.date():
+            start = datetime.combine(day, _DAY_START, tzinfo=tz)
+    return _Interval(start, end)
+
+
+def _unexplained_gaps(blocks: list[_Placed], window: _Interval) -> list[_Interval]:
+    ordered = sorted(blocks, key=lambda p: p.start)
+    busy = _merge([_Interval(b.start, b.end) for b in ordered])
+    return [
+        g
+        for g in _subtract(window, busy)
+        if g.duration_min() >= _GAP_MERGE_MIN
+    ]
+
+
+def _fill_unexplained_gaps(
+    blocks: list[_Placed],
+    gaps: list[_Interval],
+    *,
+    day: date,
+    hebrew: bool,
+    remaining_workload_min: int,
+    demand: list[_Demand],
+    seed: int,
+) -> list[_Placed]:
+    """Fill useful free windows; label intentional free time when workload is done."""
+    out = list(blocks)
+    workload_left = remaining_workload_min
+    di = 0
+    for gap in gaps:
+        minutes = gap.duration_min()
+        if minutes < _LIGHT_TASK_MIN:
+            continue
+        if workload_left >= 20 and demand:
+            need = next((d for d in demand if d.minutes > 0), None)
+            if need is None:
+                workload_left = 0
+            else:
+                if minutes >= _STUDY_FILL_MIN:
+                    duration = min(
+                        _MAX_FOCUS_MIN,
+                        max(_STUDY_FILL_MIN, min(minutes, need.minutes, 90)),
+                    )
+                    stage = need.stage
+                    if minutes < 60:
+                        stage = "flashcards" if not hebrew else need.stage
+                    action, reason = _content_for(
+                        need.target, stage, need.topic, day, hebrew
+                    )
+                    if minutes < _STUDY_FILL_MIN:
+                        action = (
+                            "Light task — flashcards, organize notes, or plan tomorrow."
+                            if not hebrew
+                            else "משימה קלה — כרטיסיות, ארגון רשימות או תכנון מחר."
+                        )
+                    end = gap.start + timedelta(minutes=duration)
+                    if need.hard_deadline and end > need.hard_deadline:
+                        end = need.hard_deadline
+                        duration = int((end - gap.start).total_seconds() // 60)
+                    if duration >= _LIGHT_TASK_MIN and (
+                        need.hard_deadline is None or gap.start < need.hard_deadline
+                    ):
+                        out.append(
+                            _Placed(
+                                start=gap.start,
+                                end=end,
+                                kind="study",
+                                title=need.target.event.title,
+                                action=action,
+                                reason=reason,
+                                event_id=need.target.event.id,
+                                phase=stage,
+                                label="Study session",
+                            )
+                        )
+                        need.minutes -= duration
+                        workload_left = max(0, workload_left - duration)
+                        di += 1
+                        continue
+                elif minutes >= _LIGHT_TASK_MIN:
+                    end = gap.start + timedelta(minutes=min(minutes, 40))
+                    out.append(
+                        _Placed(
+                            start=gap.start,
+                            end=end,
+                            kind="study",
+                            title=need.target.event.title,
+                            action=(
+                                "Light task — flashcards, organize notes, or review mistakes."
+                                if not hebrew
+                                else "משימה קלה — כרטיסיות, ארגון או חזרה על טעויות."
+                            ),
+                            reason="",
+                            event_id=need.target.event.id,
+                            phase="flashcards",
+                            label="Study session",
+                        )
+                    )
+                    used = int((end - gap.start).total_seconds() // 60)
+                    need.minutes -= used
+                    workload_left = max(0, workload_left - used)
+                    continue
+        # Do not invent filler cards when workload is complete — leave transition time blank.
+    out.sort(key=lambda p: p.start)
+    return out[:_MAX_BLOCKS_PER_DAY]
+
+
+def _split_oversized_focus(blocks: list[_Placed], *, hebrew: bool) -> list[_Placed]:
+    """Ensure focused study blocks do not exceed 150 minutes without a break."""
+    out: list[_Placed] = []
+    for b in blocks:
+        if b.kind != "study":
+            out.append(b)
+            continue
+        minutes = int((b.end - b.start).total_seconds() // 60)
+        if minutes <= _MAX_FOCUS_MIN:
+            out.append(b)
+            continue
+        cursor = b.start
+        remaining = minutes
+        part = 0
+        while remaining > 0:
+            chunk = min(_MAX_FOCUS_MIN, remaining)
+            chunk_end = cursor + timedelta(minutes=chunk)
+            out.append(
+                _Placed(
+                    start=cursor,
+                    end=chunk_end,
+                    kind="study",
+                    title=b.title,
+                    action=b.action,
+                    reason=b.reason,
+                    event_id=b.event_id,
+                    phase=b.phase,
+                    label=b.label,
+                )
+            )
+            cursor = chunk_end
+            remaining -= chunk
+            part += 1
+            if remaining >= 45:
+                br = _break_for(chunk)
+                out.append(
+                    _Placed(
+                        start=cursor,
+                        end=cursor + timedelta(minutes=br),
+                        kind="break",
+                        title="Break" if not hebrew else "הפסקה",
+                        action=(
+                            "Short reset — water, stretch, no new material."
+                            if not hebrew
+                            else "הפסקה קצרה — מים, מתיחה, בלי חומר חדש."
+                        ),
+                        reason="",
+                        label="Break",
+                    )
+                )
+                cursor += timedelta(minutes=br)
+                remaining -= br
+    out.sort(key=lambda p: p.start)
+    return out
+
+
+def validate_day_timeline(
+    blocks: list[_Placed],
+    *,
+    day: date,
+    now: datetime,
+    remaining_workload_min: int = 0,
+) -> list[str]:
+    """Return human-readable validation errors (empty means OK)."""
+    errors: list[str] = []
+    ordered = sorted(blocks, key=lambda p: p.start)
+    if [p.start for p in blocks] != [p.start for p in ordered]:
+        errors.append("blocks_not_sorted")
+    for p in ordered:
+        if p.end <= p.start:
+            errors.append("negative_or_zero_duration")
+        if p.kind == "study" and day == now.date() and p.start < now:
+            errors.append("study_in_past")
+        if p.kind == "study":
+            mins = int((p.end - p.start).total_seconds() // 60)
+            if mins > _MAX_FOCUS_MIN:
+                errors.append("focus_block_exceeds_150")
+    for a, b in zip(ordered, ordered[1:]):
+        if a.end > b.start:
+            errors.append("overlap")
+        gap = _gap_minutes(a, b)
+        if (
+            remaining_workload_min >= 20
+            and gap >= _GAP_MERGE_MIN
+            and a.kind != "calendar"
+            and b.kind != "calendar"
+        ):
+            # Unexplained gap inside active window when work remains
+            window = _active_window(day, now, ordered)
+            if a.end >= window.start and b.start <= window.end:
+                errors.append("unexplained_gap")
+        if _is_rest_like(a) and _is_rest_like(b):
+            if {a.kind, b.kind} != {"meal", "recovery"} and gap < _GAP_MERGE_MIN:
+                if not (
+                    a.kind == "recovery"
+                    and b.kind == "meal"
+                    and abs(gap) < 0.01
+                ):
+                    errors.append("redundant_adjacent_rest")
+            if a.kind == "recovery" and b.kind == "meal" and gap >= _GAP_MERGE_MIN:
+                errors.append("recovery_meal_gap")
+    return sorted(set(errors))
+
+
+def _blocks_fingerprint(blocks: list[_Placed]) -> str:
+    parts = [
+        f"{b.start.isoformat()}|{b.end.isoformat()}|{b.kind}|{b.title}"
+        for b in sorted(blocks, key=lambda p: p.start)
+    ]
+    return "\n".join(parts)
+
+
+def _normalize_day_timeline(
+    blocks: list[_Placed],
+    *,
+    day: date,
+    now: datetime,
+    hebrew: bool,
+    remaining_workload_min: int,
+    demand: list[_Demand],
+    seed: int,
+) -> list[_Placed]:
+    """
+    Bounded deterministic post-pass: sort, merge rest junk, fill useful gaps once.
+
+    Validation is non-mutating. Repair is attempted at most twice.
+    On repeated fingerprints or block-cap, keep the last valid schedule.
+    """
+    if not blocks:
+        return []
+
+    original = sorted(blocks, key=lambda p: p.start)
+    out = list(original)
+    seen: set[str] = set()
+    t0 = pytime.perf_counter()
+
+    for pass_i in range(_MAX_NORMALIZE_PASSES):
+        fp = _blocks_fingerprint(out)
+        if fp in seen:
+            logger.info(
+                "stage=normalization_stop reason=repeated_fingerprint day=%s pass=%s",
+                day.isoformat(),
+                pass_i,
+            )
+            break
+        seen.add(fp)
+
+        calendar = [p for p in out if p.kind == "calendar"]
+        soft = [p for p in out if p.kind != "calendar"]
+        soft = _snap_recovery_to_meals(soft, day, hebrew)
+        soft = _drop_redundant_breaks_before_rest(soft, hebrew=hebrew)
+        merged = _merge_near_rest_blocks(soft + calendar, hebrew=hebrew)
+        calendar = [p for p in merged if p.kind == "calendar"]
+        soft = [p for p in merged if p.kind != "calendar"]
+        out = sorted(calendar + soft, key=lambda p: p.start)
+
+        # Fill each free interval at most once per pass (no recursive sub-gap fill).
+        if pass_i == 0 and remaining_workload_min >= 20:
+            window = _active_window(day, now, out)
+            gaps = _unexplained_gaps(out, window)
+            if gaps:
+                out = _fill_unexplained_gaps(
+                    out,
+                    gaps,
+                    day=day,
+                    hebrew=hebrew,
+                    remaining_workload_min=remaining_workload_min,
+                    demand=demand,
+                    seed=seed,
+                )
+                out = _drop_redundant_breaks_before_rest(out, hebrew=hebrew)
+                out = _merge_near_rest_blocks(out, hebrew=hebrew)
+
+        out = _split_oversized_focus(out, hebrew=hebrew)
+        out = _merge_near_rest_blocks(out, hebrew=hebrew)
+        out = sorted(out, key=lambda p: p.start)[:_MAX_BLOCKS_PER_DAY]
+
+        cleaned: list[_Placed] = []
+        for p in out:
+            if day == now.date() and p.end <= now:
+                continue
+            if p.kind == "study" and day == now.date() and p.start < now:
+                p = _Placed(
+                    start=ceil_to_15_minutes(now),
+                    end=p.end,
+                    kind=p.kind,
+                    title=p.title,
+                    action=p.action,
+                    reason=p.reason,
+                    event_id=p.event_id,
+                    phase=p.phase,
+                    category=p.category,
+                    label=p.label,
+                )
+                if p.end <= p.start:
+                    continue
+            cleaned.append(p)
+        out = cleaned
+
+        if _blocks_fingerprint(out) == fp:
+            break
+
+    # Non-mutating validate + bounded repair
+    workload_left = sum(max(d.minutes, 0) for d in demand)
+    for repair_i in range(_MAX_REPAIR_PASSES + 1):
+        errors = validate_day_timeline(
+            out, day=day, now=now, remaining_workload_min=workload_left
+        )
+        hard = {
+            e
+            for e in errors
+            if e
+            in {
+                "overlap",
+                "negative_or_zero_duration",
+                "recovery_meal_gap",
+                "redundant_adjacent_rest",
+            }
+        }
+        if not hard:
+            break
+        if repair_i >= _MAX_REPAIR_PASSES:
+            logger.warning(
+                "stage=normalization_repair_exhausted day=%s errors=%s "
+                "reverting_to_pre_normalize",
+                day.isoformat(),
+                sorted(hard),
+            )
+            out = original
+            break
+        out = _merge_near_rest_blocks(out, hebrew=hebrew)
+        out = _snap_recovery_to_meals(out, day, hebrew)
+        out = _drop_redundant_breaks_before_rest(out, hebrew=hebrew)
+        out = sorted(out, key=lambda p: p.start)[:_MAX_BLOCKS_PER_DAY]
+
+    logger.info(
+        "stage=normalization_completed duration_ms=%.0f day=%s block_count=%s",
+        (pytime.perf_counter() - t0) * 1000,
+        day.isoformat(),
+        len(out),
+    )
+    return out
+
+
 def _content_for(
     target: _Target,
     stage: str,
@@ -1057,6 +1774,8 @@ def _content_for(
     days_until = (target.due.date() - day).days
     title = target.event.title
 
+    rag_bundle = _topic_bundle(target.topics, topic)
+
     if hebrew:
         if target.kind == "exam" and days_until <= 0:
             focus = topic or title
@@ -1065,7 +1784,7 @@ def _content_for(
                 "יום מבחן — חזרה קלה בלבד.",
             )
         if topic:
-            return f"{stage}. התמקדי ב: {topic}.", ""
+            return _action_with_topic(stage, topic, hebrew=True, bundle=rag_bundle), ""
         return f"{stage}.", ""
 
     if target.kind == "exam" and days_until <= 0:
@@ -1076,8 +1795,61 @@ def _content_for(
             "Exam day — short final review only.",
         )
     if topic:
-        return f"{stage}. Focus on: {topic}.", ""
+        return _action_with_topic(stage, topic, hebrew=False, bundle=rag_bundle), ""
     return f"{stage}.", ""
+
+
+def _topic_bundle(topics: list[str], current: str | None) -> str:
+    """Prefer a short multi-topic study line when RAG supplied several topics."""
+    clean = [t.strip() for t in (topics or []) if (t or "").strip()]
+    if len(clean) >= 2:
+        return ", ".join(clean[:4])
+    return (current or "").strip()
+
+
+def _action_with_topic(
+    stage: str,
+    topic: str,
+    *,
+    hebrew: bool,
+    bundle: str | None = None,
+) -> str:
+    """Turn a pedagogical stage + concrete topic into a specific study action.
+
+    Timing/ordering stay in the engine; this only shapes WHAT to study.
+    """
+    focus = (bundle or topic or "").strip() or topic
+    stage_l = (stage or "").lower()
+    if hebrew:
+        if any(k in stage_l for k in ("תרגיל", "שאלות", "מבחן לדוגמה", "פתרון")):
+            return f"תרגול: {focus}"
+        if "כרטיס" in stage_l:
+            return f"כרטיסיות על {focus}"
+        if "נוסח" in stage_l:
+            return f"חזרה על נוסחאות: {focus}"
+        if "סיכום" in stage_l:
+            return f"סיכום: {focus}"
+        if "שליפה" in stage_l or "בעל פה" in stage_l:
+            return f"הסבר בעל פה: {focus}"
+        if "טעויות" in stage_l or "חלש" in stage_l:
+            return f"חיזוק נקודות חלשות: {focus}"
+        return f"לימוד: {focus}"
+
+    if any(k in stage_l for k in ("practice", "questions", "mock", "solve")):
+        return f"Practice: {focus}"
+    if "flashcard" in stage_l:
+        return f"Drill flashcards: {focus}"
+    if "formula" in stage_l:
+        return f"Review formulas: {focus}"
+    if "summary" in stage_l:
+        return f"Summarize: {focus}"
+    if "oral" in stage_l or "recall" in stage_l:
+        return f"Explain out loud: {focus}"
+    if "mistake" in stage_l or "weak" in stage_l:
+        return f"Revise weak points: {focus}"
+    if "final" in stage_l or "mental" in stage_l or "preview" in stage_l:
+        return f"Light review: {focus}"
+    return f"Study: {focus}"
 
 
 # ---------------------------------------------------------------------------

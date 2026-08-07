@@ -2,9 +2,37 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 import requests
+
+logger = logging.getLogger(__name__)
+
+# Outer HTTP budget: must exceed backend OLLAMA_TIMEOUT_SEC (+ engine work).
+# Backend returns a rule-based plan if polish times out — do not sit for 5 minutes.
+AI_CONNECT_TIMEOUT_SEC = 10
+AI_READ_TIMEOUT_SEC = 120
+AI_TIMEOUT = (AI_CONNECT_TIMEOUT_SEC, AI_READ_TIMEOUT_SEC)
+
+
+class BackendApiError(RuntimeError):
+    """Structured API failure for presenters / workers."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: str = "",
+        detail: dict | str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+        self.detail = detail
 
 
 class BackendClient:
@@ -16,15 +44,58 @@ class BackendClient:
             response.raise_for_status()
             if not response.content:
                 return None
-            return response.json()
-        except requests.HTTPError as err:
             try:
-                detail = response.json().get("detail", str(err))
+                return response.json()
+            except ValueError as err:
+                raise BackendApiError(
+                    "Malformed JSON response from server.",
+                    status_code=response.status_code,
+                    code="malformed_json",
+                ) from err
+        except requests.HTTPError as err:
+            detail_raw: Any
+            try:
+                detail_raw = response.json().get("detail", str(err))
             except ValueError:
-                detail = response.text or str(err)
-            raise RuntimeError(f"API Error ({response.status_code}): {detail}") from err
+                detail_raw = response.text or str(err)
+
+            code = ""
+            message = str(detail_raw)
+            detail_dict: dict | None = None
+            if isinstance(detail_raw, dict):
+                detail_dict = detail_raw
+                message = str(
+                    detail_raw.get("message")
+                    or detail_raw.get("detail")
+                    or detail_raw
+                )
+                code = str(detail_raw.get("code") or "")
+            elif isinstance(detail_raw, list):
+                message = str(detail_raw)
+
+            logger.error(
+                "backend_http_error status=%s url=%s code=%s detail=%s",
+                response.status_code,
+                str(getattr(response, "url", "")),
+                code or "(none)",
+                detail_raw,
+            )
+            raise BackendApiError(
+                message,
+                status_code=response.status_code,
+                code=code,
+                detail=detail_dict if detail_dict is not None else detail_raw,
+            ) from err
+        except requests.Timeout as err:
+            raise BackendApiError(
+                "The study plan request timed out before the server responded.",
+                code="timeout",
+            ) from err
         except requests.RequestException as err:
-            raise RuntimeError(f"Connection Error: {err}") from err
+            raise BackendApiError(
+                f"Connection Error: {err}",
+                code="connection_error",
+            ) from err
 
     def create_demo_user(self) -> dict:
         response = requests.post(f"{self.base_url}/users/demo", timeout=15)
@@ -89,7 +160,7 @@ class BackendClient:
         response = requests.post(
             f"{self.base_url}/briefs/today",
             json={"user_id": user_id},
-            timeout=30,
+            timeout=AI_TIMEOUT,
         )
         return self._handle_response(response)
 
@@ -97,7 +168,7 @@ class BackendClient:
         response = requests.post(
             f"{self.base_url}/briefs/weekly",
             json={"user_id": user_id},
-            timeout=30,
+            timeout=AI_TIMEOUT,
         )
         return self._handle_response(response)
 
@@ -130,7 +201,7 @@ class BackendClient:
         response = requests.post(
             f"{self.base_url}/briefs/range",
             json=payload,
-            timeout=180,
+            timeout=AI_TIMEOUT,
         )
         return self._handle_response(response)
 
@@ -160,4 +231,47 @@ class BackendClient:
             json=payload,
             timeout=120,
         )
+        return self._handle_response(response)
+
+    def health_ollama(self) -> dict:
+        response = requests.get(f"{self.base_url}/health/ollama", timeout=10)
+        return self._handle_response(response)
+
+    def upload_rag_pdf(self, title: str, file_path: str | Path) -> dict:
+        """POST multipart PDF to /rag/upload (fields: title, file)."""
+        path = Path(file_path)
+        url = f"{self.base_url}/rag/upload"
+        logger.info(
+            "rag_upload_request url=%s title=%s filename=%s",
+            url,
+            title,
+            path.name,
+        )
+        with path.open("rb") as handle:
+            response = requests.post(
+                url,
+                data={"title": title},
+                files={"file": (path.name, handle, "application/pdf")},
+                timeout=180,
+            )
+        logger.info(
+            "rag_upload_response status=%s bytes=%s",
+            response.status_code,
+            len(response.content or b""),
+        )
+        return self._handle_response(response)
+
+    def rag_status(self) -> dict:
+        url = f"{self.base_url}/rag/status"
+        logger.info("rag_status_request url=%s", url)
+        response = requests.get(url, timeout=15)
+        return self._handle_response(response)
+
+    def remove_rag_document(self, document_id: str) -> dict:
+        doc_id = (document_id or "").strip()
+        if not doc_id:
+            raise BackendApiError("document_id is required", status_code=400, code="document_id_required")
+        url = f"{self.base_url}/rag/documents/{doc_id}"
+        logger.info("rag_remove_request url=%s document_id=%s", url, doc_id)
+        response = requests.delete(url, timeout=30)
         return self._handle_response(response)
